@@ -30,10 +30,15 @@ TELEGRAM_CHANNEL = "@testbotaii"
 
 # منابع خبری. "iranian": True یعنی منبع داخلیِ فارسی‌زبان (ترجمه نمی‌شود).
 RSS_FEEDS = [
-    # ---- منابع خارجی (ترجمه می‌شوند) ----
-    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml", "iranian": False},
-    {"url": "https://www.theguardian.com/world/rss",       "iranian": False},
-    {"url": "https://www.aljazeera.com/xml/rss/all.xml",   "iranian": False},
+    # ---- منابع خارجی معتبر (ترجمه می‌شوند) ----
+    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",                 "iranian": False},  # BBC
+    {"url": "https://www.theguardian.com/world/rss",                       "iranian": False},  # Guardian
+    {"url": "https://www.aljazeera.com/xml/rss/all.xml",                   "iranian": False},  # Al Jazeera
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",      "iranian": False},  # New York Times
+    {"url": "https://feeds.npr.org/1004/rss.xml",                          "iranian": False},  # NPR World
+    {"url": "https://rss.dw.com/rdf/rss-en-world",                         "iranian": False},  # Deutsche Welle
+    {"url": "https://www.france24.com/en/rss",                             "iranian": False},  # France 24
+    {"url": "http://rss.cnn.com/rss/edition_world.rss",                    "iranian": False},  # CNN World
     # ---- منابع ایرانی معتبر (بدون ترجمه) ----
     {"url": "https://www.irna.ir/rss",      "iranian": True},   # ایرنا
     {"url": "https://www.isna.ir/rss",      "iranian": True},   # ایسنا
@@ -119,8 +124,6 @@ def get_timestamp(entry):
 
 
 def build_message(title, summary, iranian):
-    if iranian:
-        title = "به گفته منابع داخلی: " + title
     text = f"🔹 <b>{html.escape(title)}</b>\n\n"
     if summary:
         text += f"<blockquote expandable>{html.escape(summary)}</blockquote>\n\n"
@@ -128,16 +131,49 @@ def build_message(title, summary, iranian):
     return text
 
 
+def get_og_image(article_url):
+    """عکس باکیفیت را از صفحه‌ی اصلی خبر می‌گیرد (og:image / twitter:image)."""
+    if not article_url:
+        return None
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
+        r = requests.get(article_url, headers=headers, timeout=20)
+        r.raise_for_status()
+        page = r.text
+    except Exception:
+        return None
+    for prop in ("og:image:secure_url", "og:image:url", "og:image", "twitter:image"):
+        # تگ متا ممکن است content را قبل یا بعد از property بنویسد
+        m = re.search(
+            r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
+            + r'["\'][^>]*content=["\']([^"\']+)["\']', page, re.I)
+        if m:
+            return m.group(1)
+        m = re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']'
+            + re.escape(prop) + r'["\']', page, re.I)
+        if m:
+            return m.group(1)
+    return None
+
+
 def get_image_url(entry, raw_html):
-    """عکس بنر خبر را از جاهای مختلف فید پیدا می‌کند."""
-    # ۱) media:content و media:thumbnail
+    """عکس بنر خبر را از جاهای مختلف فید پیدا می‌کند (بزرگ‌ترین را ترجیح می‌دهد)."""
+    # ۱) media:content و media:thumbnail — بزرگ‌ترین (بیشترین عرض) را انتخاب کن
+    best_url, best_w = None, -1
     for key in ("media_content", "media_thumbnail"):
-        media = entry.get(key)
-        if media:
-            for m in media:
-                u = m.get("url")
-                if u:
-                    return u
+        for m in (entry.get(key) or []):
+            u = m.get("url")
+            if not u:
+                continue
+            try:
+                w = int(m.get("width") or 0)
+            except (ValueError, TypeError):
+                w = 0
+            if w > best_w:
+                best_w, best_url = w, u
+    if best_url:
+        return best_url
     # ۲) enclosure
     for enc in (entry.get("enclosures") or []):
         u = enc.get("href") or enc.get("url")
@@ -209,6 +245,7 @@ def main():
             raw = entry.get("summary") or entry.get("description") or ""
             candidates.append({
                 "uid": uid,
+                "link": entry.get("link") or "",
                 "title": title,
                 "raw": raw,
                 "image": get_image_url(entry, raw),
@@ -235,12 +272,21 @@ def main():
                 fa_summary = translate_to_fa(short_summary(c["raw"]))
 
             msg = build_message(fa_title, fa_summary, c["iranian"])
-            if c["image"]:
+
+            # عکس باکیفیت را اول از صفحه‌ی خبر امتحان کن، بعد عکس فید
+            photo = get_og_image(c["link"]) or c["image"]
+            if photo:
                 try:
-                    send_photo_to_telegram(c["image"], msg)
+                    send_photo_to_telegram(photo, msg)
                 except Exception:
-                    # اگر ارسال عکس نشد (لینک خراب/بزرگ بود)، متنی می‌فرستیم
-                    send_to_telegram(msg)
+                    # اگر این عکس ارسال نشد، عکس فید را امتحان کن، بعد متن خالی
+                    try:
+                        if c["image"] and c["image"] != photo:
+                            send_photo_to_telegram(c["image"], msg)
+                        else:
+                            send_to_telegram(msg)
+                    except Exception:
+                        send_to_telegram(msg)
             else:
                 send_to_telegram(msg)
             print(f"  منتشر شد: {fa_title}")
