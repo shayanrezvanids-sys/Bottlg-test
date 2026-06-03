@@ -33,10 +33,12 @@ AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
 RSS_FEEDS = [
+    "https://feeds.bbci.co.uk/persian/rss.xml",                 # BBC Persian (فارسی)
+    "https://rss.dw.com/rdf/rss-per-all",                       # DW Persian (فارسی)
     "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  # BBC Middle East
     "https://www.aljazeera.com/xml/rss/all.xml",                # Al Jazeera
     "https://feeds.bbci.co.uk/news/world/rss.xml",              # BBC World
-    "https://rss.dw.com/rdf/rss-en-world",                      # Deutsche Welle
+    "https://rss.dw.com/rdf/rss-en-world",                      # Deutsche Welle (EN)
     "https://www.france24.com/en/rss",                          # France 24
 ]
 
@@ -129,6 +131,13 @@ def translate_to_fa(text):
         return text
 
 
+def maybe_translate(text):
+    """اگر متن از قبل فارسی است، ترجمه لازم نیست (برای فیدهای فارسی در حالت پشتیبان)."""
+    if re.search(r"[\u0600-\u06FF]", text or ""):
+        return text
+    return translate_to_fa(text)
+
+
 def sanitize_fa(text):
     """واژه‌های جهت‌دار را خنثی می‌کند."""
     if not text:
@@ -199,26 +208,59 @@ def build_message(title, summary, breaking=False):
     return text
 
 
-def get_og_image(article_url):
+VIDEO_EXT_RE = re.compile(r"\.(mp4|m4v|webm|mov)(\?|$)", re.I)
+
+
+def _looks_like_video_file(url):
+    return bool(url) and bool(VIDEO_EXT_RE.search(url))
+
+
+def get_feed_video(entry):
+    """ویدیوی مستقیم (فایل) را از enclosures یا media:content فید پیدا می‌کند."""
+    for enc in (entry.get("enclosures") or []):
+        u = enc.get("href") or enc.get("url")
+        typ = (enc.get("type") or "")
+        if u and (typ.startswith("video") or _looks_like_video_file(u)):
+            return u
+    for m in (entry.get("media_content") or []):
+        u = m.get("url")
+        typ = (m.get("type") or "")
+        medium = (m.get("medium") or "")
+        if u and (medium == "video" or typ.startswith("video") or _looks_like_video_file(u)):
+            return u
+    return None
+
+
+def get_og_media(article_url):
+    """از صفحه‌ی خبر، عکس باکیفیت و (در صورت وجود) ویدیوی مستقیم را برمی‌گرداند."""
     if not article_url:
-        return None
+        return (None, None)
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
         r = requests.get(article_url, headers=headers, timeout=20)
         r.raise_for_status()
         page = r.text
     except Exception:
+        return (None, None)
+
+    def meta(props):
+        for prop in props:
+            m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
+                          + r'["\'][^>]*content=["\']([^"\']+)["\']', page, re.I)
+            if m:
+                return m.group(1)
+            m = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']'
+                          + re.escape(prop) + r'["\']', page, re.I)
+            if m:
+                return m.group(1)
         return None
-    for prop in ("og:image:secure_url", "og:image:url", "og:image", "twitter:image"):
-        m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
-                      + r'["\'][^>]*content=["\']([^"\']+)["\']', page, re.I)
-        if m:
-            return m.group(1)
-        m = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']'
-                      + re.escape(prop) + r'["\']', page, re.I)
-        if m:
-            return m.group(1)
-    return None
+
+    image = meta(["og:image:secure_url", "og:image:url", "og:image", "twitter:image"])
+    video = meta(["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"])
+    # فقط فایلِ ویدیوی مستقیم را بپذیر (نه پلیر/embed مثل یوتیوب)
+    if not _looks_like_video_file(video):
+        video = None
+    return (image, video)
 
 
 def get_image_url(entry, raw_html):
@@ -268,22 +310,44 @@ def send_photo_to_telegram(photo_url, caption):
     return resp.json()
 
 
+def send_video_to_telegram(video_url, caption):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+    payload = {"chat_id": TELEGRAM_CHANNEL, "video": video_url,
+               "caption": caption, "parse_mode": "HTML", "supports_streaming": True}
+    resp = requests.post(url, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def post_news(chosen, fa_title, fa_summary, breaking):
     msg = build_message(fa_title, fa_summary, breaking)
-    photo = get_og_image(chosen["link"]) or chosen["image"]
+    og_image, og_video = get_og_media(chosen["link"])
+    video = chosen.get("video") or og_video
+    photo = og_image or chosen["image"]
+
+    # ۱) اگر فایلِ ویدیوی مستقیم بود، اول ویدیو
+    if video:
+        try:
+            send_video_to_telegram(video, msg)
+            return
+        except Exception:
+            pass  # ویدیو نشد (حجم زیاد/لینک نامناسب) → سراغ عکس
+
+    # ۲) وگرنه عکسِ باکیفیت
     if photo:
         try:
             send_photo_to_telegram(photo, msg)
+            return
         except Exception:
             try:
                 if chosen["image"] and chosen["image"] != photo:
                     send_photo_to_telegram(chosen["image"], msg)
-                else:
-                    send_to_telegram(msg)
+                    return
             except Exception:
-                send_to_telegram(msg)
-    else:
-        send_to_telegram(msg)
+                pass
+
+    # ۳) در نهایت فقط متن
+    send_to_telegram(msg)
 
 
 # ============================================================
@@ -374,9 +438,9 @@ def rule_based_pick(candidates):
                              importance_score(c["title"]),
                              c["ts"]), reverse=True)
     chosen = pool[0]
-    fa_title = translate_to_fa(chosen["title"])
+    fa_title = maybe_translate(chosen["title"])
     time.sleep(1)
-    fa_summary = translate_to_fa(short_summary(chosen["raw"]))
+    fa_summary = maybe_translate(short_summary(chosen["raw"]))
     return (chosen, fa_title, fa_summary)
 
 
@@ -407,6 +471,7 @@ def main():
                 "title": entry.get("title", ""),
                 "raw": raw,
                 "image": get_image_url(entry, raw),
+                "video": get_feed_video(entry),
                 "ts": get_timestamp(entry),
             })
 
