@@ -404,8 +404,10 @@ def ai_editor(candidates, recent_titles):
     system = (
         "You are the senior editor of an independent, strictly politically neutral, "
         "Persian-language news channel. Rules:\n"
-        "1) Only genuinely important HARD news (politics, conflict, diplomacy, economy, "
-        "disasters, major society/science). Reject soft/trivial/odd/celebrity/lifestyle/gossip.\n"
+        "1) Favor important hard news (politics, conflict, diplomacy, economy, disasters, "
+        "major society/science). Reject ONLY clearly soft/trivial items (celebrity, "
+        "lifestyle, gossip, odd/weird news). If a story is ordinary but still real news, "
+        "it is fine to pick it.\n"
         "2) SELECTION PRIORITY, in this exact order:\n"
         "   (a) FIRST priority is any GENUINE breaking event — a major, sudden, high-impact "
         "story unfolding now (see rule 4). If one exists, choose it regardless of region. "
@@ -426,16 +428,17 @@ def ai_editor(candidates, recent_titles):
     )
     recent_block = ""
     if recent_titles:
-        rt = "\n".join(f"- {t}" for t in recent_titles[-20:])
+        rt = "\n".join(f"- {t}" for t in recent_titles[-12:])
         recent_block = (
-            "ALREADY POSTED recently — do NOT pick any item that covers the SAME event as "
-            "any of these, even if it is from a different source or in a different language:\n"
-            + rt + "\n\n"
+            "Recently posted headlines (to avoid EXACT repeats). Do not re-post the very "
+            "same report. But a genuinely NEW development, update, or new angle on an "
+            "ongoing story IS allowed — treat it as new:\n" + rt + "\n\n"
         )
     user = (
-        "Below are candidate news items. Pick the SINGLE best one per the rules above. "
-        "If at least one is real, non-duplicate hard news, pick the best; if ALL are "
-        "clearly trivial OR duplicate an already-posted story, return index -1.\n\n"
+        "Below are candidate news items. You should ALMOST ALWAYS pick one — choose the "
+        "single best per the rules above. Return index -1 ONLY if every item is clearly "
+        "trivial/soft, or an exact repeat of an already-posted headline. If unsure, pick "
+        "the most newsworthy item.\n\n"
         + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
         '{\"index\": <number or -1>, \"title_fa\": \"<neutral Persian headline>\", '
@@ -527,8 +530,8 @@ def main():
 
     # تازه‌ترین‌ها اول
     candidates.sort(key=lambda c: c["ts"], reverse=True)
-    # حذفِ خبرهای تکراری نسبت به اخیراً منتشرشده‌ها (تطبیقِ هم‌زبان)
-    candidates = [c for c in candidates if not is_duplicate(c["title"], recent)]
+    # حذفِ خبرهای تکراری نسبت به اخیراً منتشرشده‌ها (تطبیقِ هم‌زبان، پنجره‌ی کوتاه)
+    candidates = [c for c in candidates if not is_duplicate(c["title"], recent[-12:])]
     if not candidates:
         print("همه‌ی خبرهای تازه تکراری بودند؛ چیزی ارسال نشد.")
         return
