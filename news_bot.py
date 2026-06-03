@@ -48,6 +48,7 @@ RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
 MAX_CANDIDATES_FOR_AI = 18
 
 SEEN_FILE = "seen.json"
+RECENT_KEEP = 40   # چند تیترِ اخیر برای جلوگیری از خبرِ تکراری نگه داشته شود
 
 # --- کلمات برای حالت پشتیبان (بدون AI) ---
 IRAN_KEYWORDS = [
@@ -94,20 +95,55 @@ LOADED_REPLACEMENTS = {
 #  توابع کمکی
 # ============================================================
 
-def load_seen():
+def load_state():
+    """وضعیت را می‌خواند: {seen: لیست شناسه‌های منتشرشده، recent: تیترهای اخیر برای ضدتکرار}.
+    با فرمت قدیمی (که فقط یک لیست بود) هم سازگار است."""
     if os.path.exists(SEEN_FILE):
         try:
             with open(SEEN_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, list):  # فرمت قدیمی
+                return {"seen": data, "recent": []}
+            return {"seen": data.get("seen", []), "recent": data.get("recent", [])}
         except Exception:
-            return []
-    return []
+            return {"seen": [], "recent": []}
+    return {"seen": [], "recent": []}
 
 
-def save_seen(seen):
-    seen = seen[-1000:]
+def save_state(state):
+    out = {"seen": state.get("seen", [])[-1000:],
+           "recent": state.get("recent", [])[-RECENT_KEEP:]}
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(seen, f, ensure_ascii=False)
+        json.dump(out, f, ensure_ascii=False)
+
+
+_STOPWORDS = set((
+    "the a an of to in on at for and or is are was were be by with from as has have "
+    "had over after into amid against new say says said amid latest "
+    "این آن برای تا هم یک های شد کرد گفت می را با که از در به بر هر"
+).split())
+
+
+def _tokens(title):
+    t = re.sub(r"[^\w\u0600-\u06FF]+", " ", (title or "").lower())
+    return set(w for w in t.split() if len(w) > 2 and w not in _STOPWORDS)
+
+
+def is_duplicate(title, recent_titles):
+    """آیا این تیتر، همان رویدادِ یکی از تیترهای اخیر است؟ (تطبیقِ هم‌زبانِ تقریبی)."""
+    a = _tokens(title)
+    if not a:
+        return False
+    for rt in recent_titles:
+        b = _tokens(rt)
+        if not b:
+            continue
+        inter = len(a & b)
+        union = len(a | b)
+        smaller = min(len(a), len(b))
+        if (union and inter / union >= 0.5) or (smaller and inter / smaller >= 0.6):
+            return True
+    return False
 
 
 def clean_html(raw):
@@ -194,8 +230,8 @@ def first_sentence(text, max_chars=160):
 
 def build_message(title, summary, breaking=False):
     if breaking:
-        # پیام فوری: کوتاه، بدون 🔹، با پیشوند 🚨فوری/
-        text = f"🚨فوری/ <b>{html.escape(title)}</b>\n\n"
+        # پیام فوری: کوتاه، بدون 🔹، کلِ تیتر همراه «فوری/» بولد
+        text = f"🚨<b>فوری/ {html.escape(title)}</b>\n\n"
         short = first_sentence(summary)
         if short:
             text += f"{html.escape(short)}\n\n"
@@ -354,7 +390,7 @@ def post_news(chosen, fa_title, fa_summary, breaking):
 #  سردبیر هوش مصنوعی (GitHub Models)
 # ============================================================
 
-def ai_editor(candidates):
+def ai_editor(candidates, recent_titles):
     """خروجی: (index, title_fa, summary_fa, breaking) یا "SKIP" یا None (AI در دسترس نیست)."""
     if not GITHUB_TOKEN:
         return None
@@ -388,10 +424,19 @@ def ai_editor(candidates):
         "consequential. Do NOT mark breaking for routine/ongoing politics, scheduled events, "
         "analysis, statements, or merely 'important' but not sudden news. When in doubt, false."
     )
+    recent_block = ""
+    if recent_titles:
+        rt = "\n".join(f"- {t}" for t in recent_titles[-20:])
+        recent_block = (
+            "ALREADY POSTED recently — do NOT pick any item that covers the SAME event as "
+            "any of these, even if it is from a different source or in a different language:\n"
+            + rt + "\n\n"
+        )
     user = (
         "Below are candidate news items. Pick the SINGLE best one per the rules above. "
-        "If at least one is real hard news, pick the best; only if ALL are clearly trivial, "
-        "return index -1.\n\n"
+        "If at least one is real, non-duplicate hard news, pick the best; if ALL are "
+        "clearly trivial OR duplicate an already-posted story, return index -1.\n\n"
+        + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
         '{\"index\": <number or -1>, \"title_fa\": \"<neutral Persian headline>\", '
         '\"summary_fa\": \"<1-2 sentence neutral Persian summary>\", \"breaking\": <true|false>}\n\n'
@@ -449,8 +494,9 @@ def rule_based_pick(candidates):
 # ============================================================
 
 def main():
-    seen = load_seen()
-    seen_set = set(seen)
+    state = load_state()
+    seen_set = set(state["seen"])
+    recent = state["recent"]
 
     candidates = []
     for feed_url in RSS_FEEDS:
@@ -479,11 +525,17 @@ def main():
         print("خبر تازه‌ای نبود.")
         return
 
-    # تازه‌ترین‌ها را برای داوری انتخاب کن
+    # تازه‌ترین‌ها اول
     candidates.sort(key=lambda c: c["ts"], reverse=True)
+    # حذفِ خبرهای تکراری نسبت به اخیراً منتشرشده‌ها (تطبیقِ هم‌زبان)
+    candidates = [c for c in candidates if not is_duplicate(c["title"], recent)]
+    if not candidates:
+        print("همه‌ی خبرهای تازه تکراری بودند؛ چیزی ارسال نشد.")
+        return
     pool = candidates[:MAX_CANDIDATES_FOR_AI]
 
-    result = ai_editor(pool)
+    # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (برای ضدتکرارِ هوشمند و چندزبانه)
+    result = ai_editor(pool, recent)
 
     chosen = fa_title = fa_summary = None
     breaking = False
@@ -496,7 +548,7 @@ def main():
             # حالت پشتیبان (بدون AI): فقط اگر تیتر صراحتاً breaking/urgent باشد
             breaking = source_is_urgent(chosen["title"], strict=True)
     elif result == "SKIP":
-        print("  سردبیر AI: هیچ خبر مهمی در این نوبت نبود؛ چیزی ارسال نشد.")
+        print("  سردبیر AI: خبر مهم/غیرتکراری در این نوبت نبود؛ چیزی ارسال نشد.")
     else:
         idx, fa_title, fa_summary, ai_breaking = result
         chosen = pool[idx]
@@ -504,7 +556,7 @@ def main():
         breaking = bool(ai_breaking)
 
     if not chosen:
-        save_seen(seen)
+        save_state(state)
         return
 
     fa_title = sanitize_fa(fa_title)
@@ -514,11 +566,12 @@ def main():
         post_news(chosen, fa_title, fa_summary, breaking)
         tag = "🚨فوری " if breaking else ""
         print(f"  منتشر شد: {tag}{fa_title}")
-        seen.append(chosen["uid"])
+        state["seen"].append(chosen["uid"])
+        state["recent"].append(chosen["title"])  # برای جلوگیری از تکرارِ همین رویداد
     except Exception as e:
         print(f"  خطا در ارسال خبر: {e}")
 
-    save_seen(seen)
+    save_state(state)
     print("تمام شد.")
 
 
