@@ -397,7 +397,7 @@ def ai_editor(candidates, recent_titles):
 
     listing = []
     for i, c in enumerate(candidates):
-        brief = clean_html(c["raw"])[:280]
+        brief = clean_html(c["raw"])[:500]
         listing.append(f"{i}. {c['title']} — {brief}")
     listing = "\n".join(listing)
 
@@ -416,15 +416,19 @@ def ai_editor(candidates, recent_titles):
         "EAST, then the rest of the WORLD. Prefer Iran/Middle East even if a bit less "
         "globally prominent, but never pick a clearly trivial regional item over a truly "
         "major global event.\n"
-        "3) Write clean, NEUTRAL Persian. Use standard, non-partisan names: write 'اسرائیل', "
-        "never 'رژیم صهیونیستی'; avoid any loaded or propaganda wording from any side. "
-        "No opinion, no sensationalism.\n"
-        "4) breaking: set true ONLY in rare cases — a MAJOR, high-impact event that is "
-        "sudden and just happened or is actively unfolding right now (e.g., a deadly attack "
-        "or missile strike, war escalation, assassination, large disaster/earthquake, coup, "
-        "sudden major political or economic shock). It must be genuinely alarming and "
-        "consequential. Do NOT mark breaking for routine/ongoing politics, scheduled events, "
-        "analysis, statements, or merely 'important' but not sudden news. When in doubt, false."
+        "3) WRITING STYLE (important): write clear, fluent, natural Persian like a sharp "
+        "modern news channel — NOT stiff wire-copy. The headline must be specific and "
+        "self-contained: state concretely what happened (who/what/where), no vague or "
+        "generic wording. The summary must give real substance — the key concrete facts "
+        "(names, numbers, places) and why it matters — readable and engaging, yet factual. "
+        "Stay NEUTRAL: standard non-partisan names (write 'اسرائیل', never 'رژیم صهیونیستی'), "
+        "no loaded/propaganda wording from any side, no opinion, no sensationalism.\n"
+        "4) breaking: reserve true for VIOLENT/CONFLICT events only — war, armed-conflict "
+        "escalation, military or missile/air strikes, terror attacks, bombings, "
+        "assassinations. STRONGLY prefer events involving Iran or the Middle East; for such "
+        "violent events elsewhere, mark breaking only if clearly major. Do NOT mark breaking "
+        "for non-violent news (politics, economy, diplomacy, disasters, statements, routine "
+        "or ongoing news). When in doubt, false."
     )
     recent_block = ""
     if recent_titles:
@@ -441,8 +445,9 @@ def ai_editor(candidates, recent_titles):
         "the most newsworthy item.\n\n"
         + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
-        '{\"index\": <number or -1>, \"title_fa\": \"<neutral Persian headline>\", '
-        '\"summary_fa\": \"<1-2 sentence neutral Persian summary>\", \"breaking\": <true|false>}\n\n'
+        '{\"index\": <number or -1>, \"title_fa\": \"<clear, specific Persian headline>\", '
+        '\"summary_fa\": \"<2-3 sentence Persian summary with concrete facts and why it matters>\", '
+        '\"breaking\": <true|false>}\n\n'
         f"Items:\n{listing}"
     )
 
