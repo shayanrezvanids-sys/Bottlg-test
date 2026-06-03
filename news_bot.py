@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-ربات خبری تلگرام (نسخه‌ی رایگان) — رادیو بولتن
-هر ۵ دقیقه یک خبر منتشر می‌کند، با اولویت اخبار مهم.
-منابع خارجی به فارسی ترجمه می‌شوند؛ منابع ایرانی با برچسب «به گفته منابع داخلی».
+ربات خبری تلگرام — رادیو بولتن (سردبیر هوش مصنوعی)
+اولویت: ایران ← خاورمیانه ← جهان. زبان خنثی. برچسب «فوری» برای رویدادهای ناگهانیِ مهم.
+سردبیر AI از GitHub Models (رایگان) استفاده می‌کند؛ اگر در دسترس نبود، روش پشتیبانِ قانونی فعال می‌شود.
 """
 
 import re
@@ -20,49 +20,71 @@ from deep_translator import GoogleTranslator
 #  تنظیمات
 # ============================================================
 
-# توکن از متغیر محیطی خوانده می‌شود (دیگر داخل کد نیست تا لو نرود).
-# روی GitHub در بخش Secrets با نام TELEGRAM_BOT_TOKEN ذخیره‌اش کن.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 if not TELEGRAM_BOT_TOKEN:
     raise SystemExit("متغیر محیطی TELEGRAM_BOT_TOKEN تنظیم نشده است.")
 
 TELEGRAM_CHANNEL = "@testbotaii"
 
-# منابع خبری. "iranian": True یعنی منبع داخلیِ فارسی‌زبان (ترجمه نمی‌شود).
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+AI_MODEL = "openai/gpt-4o-mini"
+AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
+
+# منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
 RSS_FEEDS = [
-    # ---- منابع خارجی معتبر (ترجمه می‌شوند) ----
-    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",                 "iranian": False},  # BBC
-    {"url": "https://www.theguardian.com/world/rss",                       "iranian": False},  # Guardian
-    {"url": "https://www.aljazeera.com/xml/rss/all.xml",                   "iranian": False},  # Al Jazeera
-    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",      "iranian": False},  # New York Times
-    {"url": "https://feeds.npr.org/1004/rss.xml",                          "iranian": False},  # NPR World
-    {"url": "https://rss.dw.com/rdf/rss-en-world",                         "iranian": False},  # Deutsche Welle
-    {"url": "https://www.france24.com/en/rss",                             "iranian": False},  # France 24
-    {"url": "http://rss.cnn.com/rss/edition_world.rss",                    "iranian": False},  # CNN World
-    # ---- منابع ایرانی معتبر (بدون ترجمه) ----
-    {"url": "https://www.irna.ir/rss",      "iranian": True},   # ایرنا
-    {"url": "https://www.isna.ir/rss",      "iranian": True},   # ایسنا
-    {"url": "https://www.mehrnews.com/rss", "iranian": True},   # مهر
+    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  # BBC Middle East
+    "https://www.aljazeera.com/xml/rss/all.xml",                # Al Jazeera
+    "https://feeds.bbci.co.uk/news/world/rss.xml",              # BBC World
+    "https://rss.dw.com/rdf/rss-en-world",                      # Deutsche Welle
+    "https://www.france24.com/en/rss",                          # France 24
 ]
 
-# هر اجرا چند خبر منتشر شود
 MAX_PER_RUN = 1
-# هر چند دقیقه یک‌بار اجرا شود (فقط در حالت حلقه‌ی داخلی استفاده می‌شود)
-CHECK_INTERVAL_MINUTES = 5
-# روی GitHub Actions این را تنظیم نکن (یک‌بار اجرا می‌شود و خود Actions زمان‌بندی را انجام می‌دهد).
-# روی سرور شخصی/VPS مقدار محیطی RUN_FOREVER=1 بده تا خودش حلقه بزند.
+CHECK_INTERVAL_MINUTES = 10
 RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
-
-# کلمات کلیدی برای تشخیص اخبار مهم (در تیتر)
-IMPORTANT_KEYWORDS = [
-    "breaking", "urgent", "dead", "dies", "killed", "death", "war",
-    "attack", "explosion", "earthquake", "crisis", "emergency",
-    "exclusive", "alert", "strike", "missile", "evacuat", "ceasefire",
-    "فوری", "مهم", "کشته", "حمله", "زلزله", "بحران", "جنگ", "انفجار",
-    "اضطراری", "هشدار", "موشک", "تحریم", "درگذشت", "فوت", "آتش‌بس",
-]
+MAX_CANDIDATES_FOR_AI = 18
 
 SEEN_FILE = "seen.json"
+
+# --- کلمات برای حالت پشتیبان (بدون AI) ---
+IRAN_KEYWORDS = [
+    "iran", "tehran", "iranian", "irgc", "khamenei", "pezeshkian",
+    "ایران", "تهران",
+]
+MIDEAST_KEYWORDS = [
+    "israel", "gaza", "palestin", "hamas", "hezbollah", "lebanon", "syria",
+    "iraq", "saudi", "yemen", "houthi", "qatar", "kuwait", "bahrain", "oman",
+    "uae", "emirates", "jordan", "egypt", "turkey", "middle east", "gulf",
+    "red sea", "persian gulf",
+]
+IMPORTANT_KEYWORDS = [
+    "breaking", "urgent", "war", "conflict", "attack", "strike", "missile",
+    "killed", "dead", "dies", "death", "casualties", "explosion", "earthquake",
+    "flood", "disaster", "crisis", "emergency", "sanction", "election", "vote",
+    "parliament", "president", "summit", "treaty", "ceasefire", "nuclear",
+    "economy", "inflation", "recession", "protest", "coup", "military",
+    "troops", "hostage", "breakthrough", "outbreak", "airstrike",
+]
+TRIVIA_KEYWORDS = [
+    "celebrity", "celebrities", "royal", "kardashian", "viral", "tiktok",
+    "instagram", "recipe", "horoscope", "zodiac", "lottery", "influencer",
+    "gossip", "fashion", "makeup", "prank", "weird", "bizarre", "reality tv",
+]
+# نشانه‌های فوریت در تیترِ منبع
+BREAKING_WORDS = ["breaking", "urgent", "just in", "developing", "live:"]
+SEVERE_WORDS = [
+    "missile", "strike", "attack", "airstrike", "invasion", "invades",
+    "bombing", "explosion", "killed", "earthquake", "coup", "assassinat",
+    "shelling", "war ", "ceasefire collapse",
+]
+
+# جایگزینیِ واژه‌های جهت‌دار با معادلِ خنثی (شبکه‌ی ایمنی برای هر دو حالت)
+LOADED_REPLACEMENTS = {
+    "رژیم صهیونیستی": "اسرائیل",
+    "رژیم صهیونیست": "اسرائیل",
+    "رژیم اشغالگر": "اسرائیل",
+    "رژیم کودک‌کش": "اسرائیل",
+}
 
 
 # ============================================================
@@ -91,28 +113,31 @@ def clean_html(raw):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def short_summary(text, max_sentences=3, max_chars=500):
+def short_summary(text, max_sentences=3, max_chars=400):
     text = clean_html(text)
     parts = re.split(r"(?<=[.!?؟])\s+", text)
-    summary = " ".join(parts[:max_sentences]).strip()
-    return summary[:max_chars]
+    return " ".join(parts[:max_sentences]).strip()[:max_chars]
 
 
 def translate_to_fa(text):
     if not text:
         return ""
-    text = text[:4500]
-    return GoogleTranslator(source="auto", target="fa").translate(text)
+    try:
+        return GoogleTranslator(source="auto", target="fa").translate(text[:4500])
+    except Exception:
+        return text
 
 
-def importance_score(title):
-    """هرچه کلمات مهم بیشتری در تیتر باشد، امتیاز بالاتر."""
-    t = (title or "").lower()
-    return sum(1 for kw in IMPORTANT_KEYWORDS if kw in t)
+def sanitize_fa(text):
+    """واژه‌های جهت‌دار را خنثی می‌کند."""
+    if not text:
+        return text
+    for bad, good in LOADED_REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    return text
 
 
 def get_timestamp(entry):
-    """زمان انتشار خبر برای مرتب‌سازی بر اساس تازگی."""
     for key in ("published_parsed", "updated_parsed"):
         val = entry.get(key)
         if val:
@@ -123,8 +148,38 @@ def get_timestamp(entry):
     return 0.0
 
 
-def build_message(title, summary, iranian):
-    text = f"🔹 <b>{html.escape(title)}</b>\n\n"
+def region_priority(title):
+    """۳ = ایران، ۲ = خاورمیانه، ۰ = جهان."""
+    t = (title or "").lower()
+    if any(k in t for k in IRAN_KEYWORDS):
+        return 3
+    if any(k in t for k in MIDEAST_KEYWORDS):
+        return 2
+    return 0
+
+
+def importance_score(title):
+    t = (title or "").lower()
+    pos = sum(1 for kw in IMPORTANT_KEYWORDS if kw in t)
+    neg = sum(1 for kw in TRIVIA_KEYWORDS if kw in t)
+    return pos - 2 * neg
+
+
+def source_is_urgent(title, strict=False):
+    """آیا تیترِ منبع نشانه‌ی فوریت دارد؟ strict=True فقط کلمات صریح breaking را می‌پذیرد."""
+    t = (title or "").lower()
+    if any(w in t for w in BREAKING_WORDS):
+        return True
+    if not strict and any(w in t for w in SEVERE_WORDS):
+        return True
+    return False
+
+
+def build_message(title, summary, breaking=False):
+    text = ""
+    if breaking:
+        text += "🚨 <b>فوری</b>\n\n"
+    text += f"🔹 <b>{html.escape(title)}</b>\n\n"
     if summary:
         text += f"<blockquote expandable>{html.escape(summary)}</blockquote>\n\n"
     text += "@RadioBulletin | رادیو بولتن"
@@ -132,7 +187,6 @@ def build_message(title, summary, iranian):
 
 
 def get_og_image(article_url):
-    """عکس باکیفیت را از صفحه‌ی اصلی خبر می‌گیرد (og:image / twitter:image)."""
     if not article_url:
         return None
     try:
@@ -143,23 +197,18 @@ def get_og_image(article_url):
     except Exception:
         return None
     for prop in ("og:image:secure_url", "og:image:url", "og:image", "twitter:image"):
-        # تگ متا ممکن است content را قبل یا بعد از property بنویسد
-        m = re.search(
-            r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
-            + r'["\'][^>]*content=["\']([^"\']+)["\']', page, re.I)
+        m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop)
+                      + r'["\'][^>]*content=["\']([^"\']+)["\']', page, re.I)
         if m:
             return m.group(1)
-        m = re.search(
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']'
-            + re.escape(prop) + r'["\']', page, re.I)
+        m = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']'
+                      + re.escape(prop) + r'["\']', page, re.I)
         if m:
             return m.group(1)
     return None
 
 
 def get_image_url(entry, raw_html):
-    """عکس بنر خبر را از جاهای مختلف فید پیدا می‌کند (بزرگ‌ترین را ترجیح می‌دهد)."""
-    # ۱) media:content و media:thumbnail — بزرگ‌ترین (بیشترین عرض) را انتخاب کن
     best_url, best_w = None, -1
     for key in ("media_content", "media_thumbnail"):
         for m in (entry.get(key) or []):
@@ -174,18 +223,14 @@ def get_image_url(entry, raw_html):
                 best_w, best_url = w, u
     if best_url:
         return best_url
-    # ۲) enclosure
     for enc in (entry.get("enclosures") or []):
         u = enc.get("href") or enc.get("url")
         typ = (enc.get("type") or "")
-        if u and (typ.startswith("image") or
-                  re.search(r"\.(jpe?g|png|webp)", u, re.I)):
+        if u and (typ.startswith("image") or re.search(r"\.(jpe?g|png|webp)", u, re.I)):
             return u
-    # ۳) لینک‌های نوع تصویر
     for link in (entry.get("links") or []):
         if (link.get("type") or "").startswith("image") and link.get("href"):
             return link["href"]
-    # ۴) تگ <img> داخل متن خبر
     m = re.search(r'<img[^>]+src="([^"]+)"', raw_html or "")
     if m:
         return m.group(1)
@@ -194,12 +239,8 @@ def get_image_url(entry, raw_html):
 
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHANNEL,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": TELEGRAM_CHANNEL, "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": True}
     resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
     return resp.json()
@@ -207,15 +248,114 @@ def send_to_telegram(text):
 
 def send_photo_to_telegram(photo_url, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    payload = {
-        "chat_id": TELEGRAM_CHANNEL,
-        "photo": photo_url,
-        "caption": caption,
-        "parse_mode": "HTML",
-    }
+    payload = {"chat_id": TELEGRAM_CHANNEL, "photo": photo_url,
+               "caption": caption, "parse_mode": "HTML"}
     resp = requests.post(url, json=payload, timeout=60)
     resp.raise_for_status()
     return resp.json()
+
+
+def post_news(chosen, fa_title, fa_summary, breaking):
+    msg = build_message(fa_title, fa_summary, breaking)
+    photo = get_og_image(chosen["link"]) or chosen["image"]
+    if photo:
+        try:
+            send_photo_to_telegram(photo, msg)
+        except Exception:
+            try:
+                if chosen["image"] and chosen["image"] != photo:
+                    send_photo_to_telegram(chosen["image"], msg)
+                else:
+                    send_to_telegram(msg)
+            except Exception:
+                send_to_telegram(msg)
+    else:
+        send_to_telegram(msg)
+
+
+# ============================================================
+#  سردبیر هوش مصنوعی (GitHub Models)
+# ============================================================
+
+def ai_editor(candidates):
+    """خروجی: (index, title_fa, summary_fa, breaking) یا "SKIP" یا None (AI در دسترس نیست)."""
+    if not GITHUB_TOKEN:
+        return None
+
+    listing = []
+    for i, c in enumerate(candidates):
+        brief = clean_html(c["raw"])[:280]
+        listing.append(f"{i}. {c['title']} — {brief}")
+    listing = "\n".join(listing)
+
+    system = (
+        "You are the senior editor of an independent, strictly politically neutral, "
+        "Persian-language news channel. Rules:\n"
+        "1) Only genuinely important HARD news (politics, conflict, diplomacy, economy, "
+        "disasters, major society/science). Reject soft/trivial/odd/celebrity/lifestyle/gossip.\n"
+        "2) PRIORITY ORDER for selection: first important news about IRAN, then the wider "
+        "MIDDLE EAST, then the rest of the WORLD. Prefer Iran/Middle East items even if a "
+        "bit less globally prominent, but never pick a clearly trivial regional item over a "
+        "truly major global event.\n"
+        "3) Write clean, NEUTRAL Persian. Use standard, non-partisan names: write 'اسرائیل', "
+        "never 'رژیم صهیونیستی'; avoid any loaded or propaganda wording from any side. "
+        "No opinion, no sensationalism.\n"
+        "4) breaking=true ONLY for a sudden, major, high-impact event happening now "
+        "(attack, missile strike, war escalation, disaster, major political shock). Else false."
+    )
+    user = (
+        "Below are candidate news items. Pick the SINGLE best one per the rules above. "
+        "If at least one is real hard news, pick the best; only if ALL are clearly trivial, "
+        "return index -1.\n\n"
+        "Respond with ONLY a JSON object, no markdown, no extra text:\n"
+        '{\"index\": <number or -1>, \"title_fa\": \"<neutral Persian headline>\", '
+        '\"summary_fa\": \"<1-2 sentence neutral Persian summary>\", \"breaking\": <true|false>}\n\n'
+        f"Items:\n{listing}"
+    )
+
+    payload = {
+        "model": AI_MODEL,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
+    try:
+        r = requests.post(AI_ENDPOINT, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"].strip()
+        content = re.sub(r"^```(?:json)?|```$", "", content.strip()).strip()
+        data = json.loads(content)
+        idx = int(data.get("index", -1))
+        if idx == -1:
+            return "SKIP"
+        if 0 <= idx < len(candidates):
+            title_fa = (data.get("title_fa") or "").strip()
+            summary_fa = (data.get("summary_fa") or "").strip()
+            breaking = bool(data.get("breaking", False))
+            if title_fa:
+                return (idx, title_fa, summary_fa, breaking)
+        return None
+    except Exception as e:
+        print("  سردبیر AI در دسترس نیست:", e)
+        return None
+
+
+def rule_based_pick(candidates):
+    """پشتیبان: خبر نرم را حذف، اولویت ایران←خاورمیانه←جهان، سپس اهمیت و تازگی."""
+    pool = [c for c in candidates if importance_score(c["title"]) >= 0]
+    if not pool:
+        return None
+    pool.sort(key=lambda c: (region_priority(c["title"]),
+                             importance_score(c["title"]),
+                             c["ts"]), reverse=True)
+    chosen = pool[0]
+    fa_title = translate_to_fa(chosen["title"])
+    time.sleep(1)
+    fa_summary = translate_to_fa(short_summary(chosen["raw"]))
+    return (chosen, fa_title, fa_summary)
 
 
 # ============================================================
@@ -226,84 +366,78 @@ def main():
     seen = load_seen()
     seen_set = set(seen)
 
-    # ۱) جمع‌آوری همه‌ی خبرهای جدید از همه‌ی منابع
     candidates = []
-    for feed_cfg in RSS_FEEDS:
-        feed_url = feed_cfg["url"]
+    for feed_url in RSS_FEEDS:
         print(f"در حال خواندن فید: {feed_url}")
         try:
             feed = feedparser.parse(feed_url)
         except Exception as e:
             print(f"  خطا در خواندن فید: {e}")
             continue
-
         for entry in feed.entries:
             uid = entry.get("id") or entry.get("link")
             if not uid or uid in seen_set:
                 continue
-            title = entry.get("title", "")
             raw = entry.get("summary") or entry.get("description") or ""
             candidates.append({
                 "uid": uid,
                 "link": entry.get("link") or "",
-                "title": title,
+                "title": entry.get("title", ""),
                 "raw": raw,
                 "image": get_image_url(entry, raw),
-                "iranian": feed_cfg["iranian"],
-                "score": importance_score(title),
                 "ts": get_timestamp(entry),
             })
 
-    # ۲) اولویت با اخبار مهم، سپس تازه‌ترین‌ها
-    candidates.sort(key=lambda c: (c["score"], c["ts"]), reverse=True)
+    if not candidates:
+        print("خبر تازه‌ای نبود.")
+        return
 
-    # ۳) انتشار
-    posted = 0
-    for c in candidates:
-        if posted >= MAX_PER_RUN:
-            break
-        try:
-            if c["iranian"]:
-                fa_title = c["title"]
-                fa_summary = short_summary(c["raw"])
-            else:
-                fa_title = translate_to_fa(c["title"])
-                time.sleep(1)
-                fa_summary = translate_to_fa(short_summary(c["raw"]))
+    # تازه‌ترین‌ها را برای داوری انتخاب کن
+    candidates.sort(key=lambda c: c["ts"], reverse=True)
+    pool = candidates[:MAX_CANDIDATES_FOR_AI]
 
-            msg = build_message(fa_title, fa_summary, c["iranian"])
+    result = ai_editor(pool)
 
-            # عکس باکیفیت را اول از صفحه‌ی خبر امتحان کن، بعد عکس فید
-            photo = get_og_image(c["link"]) or c["image"]
-            if photo:
-                try:
-                    send_photo_to_telegram(photo, msg)
-                except Exception:
-                    # اگر این عکس ارسال نشد، عکس فید را امتحان کن، بعد متن خالی
-                    try:
-                        if c["image"] and c["image"] != photo:
-                            send_photo_to_telegram(c["image"], msg)
-                        else:
-                            send_to_telegram(msg)
-                    except Exception:
-                        send_to_telegram(msg)
-            else:
-                send_to_telegram(msg)
-            print(f"  منتشر شد: {fa_title}")
-            posted += 1
-            seen.append(c["uid"])
-            seen_set.add(c["uid"])
-        except Exception as e:
-            print(f"  خطا در پردازش/ارسال خبر: {e}")
-            continue
+    chosen = fa_title = fa_summary = None
+    breaking = False
+
+    if result is None:
+        print("  بازگشت به روش قانونی (پشتیبان).")
+        rb = rule_based_pick(pool)
+        if rb:
+            chosen, fa_title, fa_summary = rb
+            # در حالت پشتیبان فقط کلمات صریحِ فوریت را می‌پذیریم
+            breaking = source_is_urgent(chosen["title"], strict=True)
+    elif result == "SKIP":
+        print("  سردبیر AI: هیچ خبر مهمی در این نوبت نبود؛ چیزی ارسال نشد.")
+    else:
+        idx, fa_title, fa_summary, ai_breaking = result
+        chosen = pool[idx]
+        # فوری = هم AI گفت فوری، هم تیترِ منبع نشانه‌ی فوریت داشت
+        breaking = ai_breaking and source_is_urgent(chosen["title"], strict=False)
+
+    if not chosen:
+        save_seen(seen)
+        return
+
+    fa_title = sanitize_fa(fa_title)
+    fa_summary = sanitize_fa(fa_summary)
+
+    try:
+        post_news(chosen, fa_title, fa_summary, breaking)
+        tag = "🚨فوری " if breaking else ""
+        print(f"  منتشر شد: {tag}{fa_title}")
+        seen.append(chosen["uid"])
+    except Exception as e:
+        print(f"  خطا در ارسال خبر: {e}")
 
     save_seen(seen)
-    print(f"تمام شد. خبرهای منتشرشده در این اجرا: {posted}")
+    print("تمام شد.")
 
 
 if __name__ == "__main__":
     if RUN_FOREVER:
-        print("ربات شروع شد (هر ۵ دقیقه یک خبر)...")
+        print("ربات شروع شد (حالت حلقه‌ی داخلی)...")
         while True:
             try:
                 main()
