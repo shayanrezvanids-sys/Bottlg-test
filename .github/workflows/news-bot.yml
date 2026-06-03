@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  models: read
 
 concurrency:
   group: news-bot
@@ -26,6 +27,7 @@ jobs:
       - name: run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python news_bot.py
       - name: save seen.json
         run: |
