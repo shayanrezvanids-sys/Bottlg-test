@@ -10,6 +10,7 @@ import json
 import time
 import html
 import os
+import calendar
 
 import requests
 import feedparser
@@ -45,6 +46,9 @@ RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
 MAX_CANDIDATES_FOR_AI = 18
 
 SEEN_FILE = "seen.json"
+
+# خبر فقط وقتی «فوری» تگ می‌خورد که حداکثر این مدت پیش منتشر شده باشد (۳۰ دقیقه).
+RECENT_SECONDS = 30 * 60
 
 # --- کلمات برای حالت پشتیبان (بدون AI) ---
 IRAN_KEYWORDS = [
@@ -142,7 +146,7 @@ def get_timestamp(entry):
         val = entry.get(key)
         if val:
             try:
-                return time.mktime(val)
+                return calendar.timegm(val)
             except Exception:
                 pass
     return 0.0
@@ -175,11 +179,28 @@ def source_is_urgent(title, strict=False):
     return False
 
 
+def is_recent(ts):
+    """آیا خبر حداکثر ۳۰ دقیقه پیش منتشر شده؟ (اگر زمان نامعلوم بود، خیر)."""
+    return ts > 0 and (time.time() - ts) <= RECENT_SECONDS
+
+
+def first_sentence(text, max_chars=160):
+    text = (text or "").strip()
+    parts = re.split(r"(?<=[.!?؟])\s+", text)
+    s = parts[0].strip() if parts else text
+    return s[:max_chars]
+
+
 def build_message(title, summary, breaking=False):
-    text = ""
     if breaking:
-        text += "🚨 <b>فوری</b>\n\n"
-    text += f"🔹 <b>{html.escape(title)}</b>\n\n"
+        # پیام فوری: کوتاه، بدون 🔹، با پیشوند 🚨فوری/
+        text = f"🚨فوری/ <b>{html.escape(title)}</b>\n\n"
+        short = first_sentence(summary)
+        if short:
+            text += f"{html.escape(short)}\n\n"
+        text += "@RadioBulletin | رادیو بولتن"
+        return text
+    text = f"🔹 <b>{html.escape(title)}</b>\n\n"
     if summary:
         text += f"<blockquote expandable>{html.escape(summary)}</blockquote>\n\n"
     text += "@RadioBulletin | رادیو بولتن"
@@ -406,15 +427,16 @@ def main():
         rb = rule_based_pick(pool)
         if rb:
             chosen, fa_title, fa_summary = rb
-            # در حالت پشتیبان فقط کلمات صریحِ فوریت را می‌پذیریم
-            breaking = source_is_urgent(chosen["title"], strict=True)
+            # حالت پشتیبان: فقط کلمات صریحِ فوریت + خبر تازه (≤۳۰ دقیقه)
+            breaking = source_is_urgent(chosen["title"], strict=True) and is_recent(chosen["ts"])
     elif result == "SKIP":
         print("  سردبیر AI: هیچ خبر مهمی در این نوبت نبود؛ چیزی ارسال نشد.")
     else:
         idx, fa_title, fa_summary, ai_breaking = result
         chosen = pool[idx]
-        # فوری = هم AI گفت فوری، هم تیترِ منبع نشانه‌ی فوریت داشت
-        breaking = ai_breaking and source_is_urgent(chosen["title"], strict=False)
+        # فوری = AI گفت فوری + تیترِ منبع نشانه‌ی فوریت داشت + خبر تازه (≤۳۰ دقیقه)
+        breaking = (ai_breaking and source_is_urgent(chosen["title"], strict=False)
+                    and is_recent(chosen["ts"]))
 
     if not chosen:
         save_seen(seen)
