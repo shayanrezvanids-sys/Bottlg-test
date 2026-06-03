@@ -47,9 +47,6 @@ MAX_CANDIDATES_FOR_AI = 18
 
 SEEN_FILE = "seen.json"
 
-# خبر فقط وقتی «فوری» تگ می‌خورد که حداکثر این مدت پیش منتشر شده باشد (۳۰ دقیقه).
-RECENT_SECONDS = 30 * 60
-
 # --- کلمات برای حالت پشتیبان (بدون AI) ---
 IRAN_KEYWORDS = [
     "iran", "tehran", "iranian", "irgc", "khamenei", "pezeshkian",
@@ -177,11 +174,6 @@ def source_is_urgent(title, strict=False):
     if not strict and any(w in t for w in SEVERE_WORDS):
         return True
     return False
-
-
-def is_recent(ts):
-    """آیا خبر حداکثر ۳۰ دقیقه پیش منتشر شده؟ (اگر زمان نامعلوم بود، خیر)."""
-    return ts > 0 and (time.time() - ts) <= RECENT_SECONDS
 
 
 def first_sentence(text, max_chars=160):
@@ -314,15 +306,23 @@ def ai_editor(candidates):
         "Persian-language news channel. Rules:\n"
         "1) Only genuinely important HARD news (politics, conflict, diplomacy, economy, "
         "disasters, major society/science). Reject soft/trivial/odd/celebrity/lifestyle/gossip.\n"
-        "2) PRIORITY ORDER for selection: first important news about IRAN, then the wider "
-        "MIDDLE EAST, then the rest of the WORLD. Prefer Iran/Middle East items even if a "
-        "bit less globally prominent, but never pick a clearly trivial regional item over a "
-        "truly major global event.\n"
+        "2) SELECTION PRIORITY, in this exact order:\n"
+        "   (a) FIRST priority is any GENUINE breaking event — a major, sudden, high-impact "
+        "story unfolding now (see rule 4). If one exists, choose it regardless of region. "
+        "If several are breaking, prefer Iran, then Middle East, then world.\n"
+        "   (b) If nothing is breaking, prefer important IRAN news, then the wider MIDDLE "
+        "EAST, then the rest of the WORLD. Prefer Iran/Middle East even if a bit less "
+        "globally prominent, but never pick a clearly trivial regional item over a truly "
+        "major global event.\n"
         "3) Write clean, NEUTRAL Persian. Use standard, non-partisan names: write 'اسرائیل', "
         "never 'رژیم صهیونیستی'; avoid any loaded or propaganda wording from any side. "
         "No opinion, no sensationalism.\n"
-        "4) breaking=true ONLY for a sudden, major, high-impact event happening now "
-        "(attack, missile strike, war escalation, disaster, major political shock). Else false."
+        "4) breaking: set true ONLY in rare cases — a MAJOR, high-impact event that is "
+        "sudden and just happened or is actively unfolding right now (e.g., a deadly attack "
+        "or missile strike, war escalation, assassination, large disaster/earthquake, coup, "
+        "sudden major political or economic shock). It must be genuinely alarming and "
+        "consequential. Do NOT mark breaking for routine/ongoing politics, scheduled events, "
+        "analysis, statements, or merely 'important' but not sudden news. When in doubt, false."
     )
     user = (
         "Below are candidate news items. Pick the SINGLE best one per the rules above. "
@@ -365,11 +365,12 @@ def ai_editor(candidates):
 
 
 def rule_based_pick(candidates):
-    """پشتیبان: خبر نرم را حذف، اولویت ایران←خاورمیانه←جهان، سپس اهمیت و تازگی."""
+    """پشتیبان: خبر نرم را حذف؛ اولویت: فوری ← ایران ← خاورمیانه ← جهان ← اهمیت ← تازگی."""
     pool = [c for c in candidates if importance_score(c["title"]) >= 0]
     if not pool:
         return None
-    pool.sort(key=lambda c: (region_priority(c["title"]),
+    pool.sort(key=lambda c: (1 if source_is_urgent(c["title"], strict=True) else 0,
+                             region_priority(c["title"]),
                              importance_score(c["title"]),
                              c["ts"]), reverse=True)
     chosen = pool[0]
@@ -427,16 +428,15 @@ def main():
         rb = rule_based_pick(pool)
         if rb:
             chosen, fa_title, fa_summary = rb
-            # حالت پشتیبان: فقط کلمات صریحِ فوریت + خبر تازه (≤۳۰ دقیقه)
-            breaking = source_is_urgent(chosen["title"], strict=True) and is_recent(chosen["ts"])
+            # حالت پشتیبان (بدون AI): فقط اگر تیتر صراحتاً breaking/urgent باشد
+            breaking = source_is_urgent(chosen["title"], strict=True)
     elif result == "SKIP":
         print("  سردبیر AI: هیچ خبر مهمی در این نوبت نبود؛ چیزی ارسال نشد.")
     else:
         idx, fa_title, fa_summary, ai_breaking = result
         chosen = pool[idx]
-        # فوری = AI گفت فوری + تیترِ منبع نشانه‌ی فوریت داشت + خبر تازه (≤۳۰ دقیقه)
-        breaking = (ai_breaking and source_is_urgent(chosen["title"], strict=False)
-                    and is_recent(chosen["ts"]))
+        # فوری را کاملاً به قضاوتِ سردبیر AI می‌سپاریم (مهم + تأثیرگذار + ناگهانی)
+        breaking = bool(ai_breaking)
 
     if not chosen:
         save_seen(seen)
