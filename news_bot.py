@@ -33,6 +33,7 @@ AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
 RSS_FEEDS = [
+    "https://www.iranintl.com/feed",                           # Iran International (فارسی) — نیازمند تأیید
     "https://feeds.bbci.co.uk/persian/rss.xml",                 # BBC Persian (فارسی)
     "https://rss.dw.com/rdf/rss-per-all",                       # DW Persian (فارسی)
     "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  # BBC Middle East
@@ -45,7 +46,7 @@ RSS_FEEDS = [
 MAX_PER_RUN = 1
 CHECK_INTERVAL_MINUTES = 10
 RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
-MAX_CANDIDATES_FOR_AI = 18
+MAX_CANDIDATES_FOR_AI = 12    # متنِ کاملِ این تعداد خبر خوانده و به AI داده می‌شود
 
 SEEN_FILE = "seen.json"
 RECENT_KEEP = 40   # چند تیترِ اخیر برای جلوگیری از خبرِ تکراری نگه داشته شود
@@ -278,6 +279,23 @@ def get_feed_video(entry):
     return best_url
 
 
+def get_article_text(url):
+    """متنِ اصلیِ خبر را از صفحه‌اش می‌خواند تا AI تمامِ جزئیاتِ مهم را داشته باشد."""
+    if not url:
+        return ""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
+        r = requests.get(url, headers=headers, timeout=12)
+        r.raise_for_status()
+        page = r.text
+    except Exception:
+        return ""
+    paras = re.findall(r"<p[^>]*>(.*?)</p>", page, re.S | re.I)
+    text = " ".join(clean_html(p) for p in paras)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:1800]
+
+
 def get_og_media(article_url):
     """از صفحه‌ی خبر، عکس باکیفیت و (در صورت وجود) ویدیوی مستقیم را برمی‌گرداند."""
     if not article_url:
@@ -436,7 +454,7 @@ def ai_editor(candidates, recent_titles):
 
     listing = []
     for i, c in enumerate(candidates):
-        brief = clean_html(c["raw"])[:500]
+        brief = (c.get("body") or clean_html(c["raw"]))[:1200]
         listing.append(f"{i}. {c['title']} — {brief}")
     listing = "\n".join(listing)
 
@@ -460,12 +478,17 @@ def ai_editor(candidates, recent_titles):
         "   - Front-load the news: the first words say what actually happened (who/what/where), "
         "concrete with names, numbers, places.\n"
         "   - Natural, idiomatic Persian — never translated-sounding or stiff. Vary sentence "
-        "length; short punchy sentences are good. Use a popular, accessible (عامه‌پسند) voice "
-        "ordinary readers enjoy — avoid an official/bureaucratic register.\n"
-        "   - Do NOT tack on a formulaic 'why it matters' sentence; do NOT hedge or over-explain.\n"
+        "length; short punchy sentences are good. Use a warm, friendly, intimate (صمیمی) "
+        "voice — like telling a friend what happened — not an official/bureaucratic tone.\n"
+        "   - COMPLETENESS: include ALL the key substantive details the reader needs — what "
+        "was actually said or done, the concrete content (the main points of a statement, "
+        "the figures, names, places, outcome). Never write only that 'someone issued a "
+        "statement' without saying WHAT they actually said. Use the article text provided.\n"
+        "   - Do NOT hedge or pad. State the facts.\n"
         "   - BANNED cliché/filler phrases: 'شایان ذکر است', 'گفتنی است', 'لازم به ذکر است', "
         "'قابل ذکر است', 'در همین راستا', 'بر این اساس', 'در همین حال'. Avoid generic connectives.\n"
-        "   - Length is flexible: 1-3 sentences, only as long as the story needs — not a fixed template.\n"
+        "   - Length: as long as needed to convey the key facts (usually 2-4 sentences), not "
+        "a fixed template.\n"
         "   - Stay NEUTRAL and factual: standard non-partisan names (write 'اسرائیل', never "
         "'رژیم صهیونیستی'); no loaded/propaganda wording from any side; no opinion, no "
         "sensationalism, no emojis inside the text.\n"
@@ -492,7 +515,7 @@ def ai_editor(candidates, recent_titles):
         + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
         '{\"index\": <number or -1>, \"title_fa\": \"<clear, specific, human Persian headline>\", '
-        '\"summary_fa\": \"<human, non-formal Persian summary, concrete facts, 1-3 sentences>\", '
+        '\"summary_fa\": \"<warm, human Persian summary with ALL key details/content, 2-4 sentences>\", '
         '\"breaking\": <true|false>}\n\n'
         f"Items:\n{listing}"
     )
@@ -587,6 +610,10 @@ def main():
         print("همه‌ی خبرهای تازه تکراری بودند؛ چیزی ارسال نشد.")
         return
     pool = candidates[:MAX_CANDIDATES_FOR_AI]
+
+    # متنِ کاملِ خبرها را بخوان تا سردبیر AI همه‌ی جزئیاتِ مهم را داشته باشد
+    for c in pool:
+        c["body"] = get_article_text(c["link"])
 
     # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (برای ضدتکرارِ هوشمند و چندزبانه)
     result = ai_editor(pool, recent)
