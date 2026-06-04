@@ -33,7 +33,6 @@ AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
 RSS_FEEDS = [
-    "https://www.iranintl.com/feed",                           # Iran International (فارسی) — نیازمند تأیید
     "https://feeds.bbci.co.uk/persian/rss.xml",                 # BBC Persian (فارسی)
     "https://rss.dw.com/rdf/rss-per-all",                       # DW Persian (فارسی)
     "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  # BBC Middle East
@@ -497,7 +496,17 @@ def ai_editor(candidates, recent_titles):
         "assassinations. STRONGLY prefer events involving Iran or the Middle East; for such "
         "violent events elsewhere, mark breaking only if clearly major. Do NOT mark breaking "
         "for non-violent news (politics, economy, diplomacy, disasters, statements, routine "
-        "or ongoing news). When in doubt, false."
+        "or ongoing news). When in doubt, false.\n\n"
+        "VOICE EXAMPLES — match this warm, clear, concrete tone and rhythm (do NOT reuse "
+        "their facts):\n"
+        "• title: «دلار از مرز ۹۰ هزار تومان گذشت؛ بازار جا خورد» — summary: «قیمت دلار امروز "
+        "برای اولین‌بار از ۹۰ هزار تومان رد شد و فعالان بازار می‌گویند بلاتکلیفی مذاکرات و کمبود "
+        "عرضه فشار را بیشتر کرده. خیلی از صرافی‌ها از صبح فروش را محدود کرده‌اند و همه چشم‌به‌راهِ "
+        "واکنش بانک مرکزی‌اند.»\n"
+        "• title: «حمله پهپادی به یک کشتی در دریای سرخ؛ خدمه سالم‌اند» — summary: «یک کشتی تجاری "
+        "صبح امروز در دریای سرخ هدف پهپاد قرار گرفت، ولی شرکت مالک می‌گوید همه‌ی خدمه سالم‌اند و "
+        "کشتی به راهش ادامه داده. این چندمین حمله در منطقه طی هفته‌های اخیر است و نگرانی از "
+        "امنیت مسیر کشتیرانی را بالا برده.»"
     )
     recent_block = ""
     if recent_titles:
@@ -522,7 +531,7 @@ def ai_editor(candidates, recent_titles):
 
     payload = {
         "model": AI_MODEL,
-        "temperature": 0.3,
+        "temperature": 0.7,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
