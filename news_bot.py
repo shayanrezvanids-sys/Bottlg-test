@@ -252,19 +252,30 @@ def _looks_like_video_file(url):
 
 
 def get_feed_video(entry):
-    """ویدیوی مستقیم (فایل) را از enclosures یا media:content فید پیدا می‌کند."""
+    """ویدیوی مستقیم (فایل) را از فید پیدا می‌کند و باکیفیت‌ترین را برمی‌گرداند."""
+    best_url, best_score = None, -1
     for enc in (entry.get("enclosures") or []):
         u = enc.get("href") or enc.get("url")
         typ = (enc.get("type") or "")
-        if u and (typ.startswith("video") or _looks_like_video_file(u)):
-            return u
+        if u and (typ.startswith("video") or _looks_like_video_file(u)) and best_score < 0:
+            best_url, best_score = u, 0
     for m in (entry.get("media_content") or []):
         u = m.get("url")
         typ = (m.get("type") or "")
         medium = (m.get("medium") or "")
         if u and (medium == "video" or typ.startswith("video") or _looks_like_video_file(u)):
-            return u
-    return None
+            try:
+                h = int(m.get("height") or 0)
+            except (ValueError, TypeError):
+                h = 0
+            try:
+                br = int(m.get("bitrate") or 0)
+            except (ValueError, TypeError):
+                br = 0
+            score = h * 100000 + br  # بالاترین رزولوشن/بیت‌ریت
+            if score > best_score:
+                best_url, best_score = u, score
+    return best_url
 
 
 def get_og_media(article_url):
@@ -346,11 +357,39 @@ def send_photo_to_telegram(photo_url, caption):
     return resp.json()
 
 
+def _download_capped(url, cap=50 * 1024 * 1024):
+    """ویدیو را تا سقفِ مشخص دانلود می‌کند؛ اگر بزرگ‌تر بود None برمی‌گرداند."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
+    r = requests.get(url, headers=headers, timeout=180, stream=True)
+    r.raise_for_status()
+    data = b""
+    for chunk in r.iter_content(65536):
+        data += chunk
+        if len(data) > cap:
+            r.close()
+            return None
+    return data
+
+
 def send_video_to_telegram(video_url, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
-    payload = {"chat_id": TELEGRAM_CHANNEL, "video": video_url,
-               "caption": caption, "parse_mode": "HTML", "supports_streaming": True}
-    resp = requests.post(url, json=payload, timeout=120)
+    payload = {"chat_id": TELEGRAM_CHANNEL, "caption": caption,
+               "parse_mode": "HTML", "supports_streaming": "true"}
+    # تلاش اول: دانلودِ خودِ فایل و آپلودِ مستقیم (کیفیتِ بهتر، تا ۵۰ مگابایت)
+    data = None
+    try:
+        data = _download_capped(video_url)
+    except Exception:
+        data = None
+    if data:
+        files = {"video": ("video.mp4", data)}
+        resp = requests.post(url, data=payload, files=files, timeout=300)
+        resp.raise_for_status()
+        return resp.json()
+    # تلاش دوم: ارسال با لینک (اگر دانلود نشد یا خیلی بزرگ بود)
+    p = dict(payload)
+    p["video"] = video_url
+    resp = requests.post(url, json=p, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
@@ -361,13 +400,13 @@ def post_news(chosen, fa_title, fa_summary, breaking):
     video = chosen.get("video") or og_video
     photo = og_image or chosen["image"]
 
-    # ۱) اگر فایلِ ویدیوی مستقیم بود، اول ویدیو
+    # ۱) اگر فایلِ ویدیوی مستقیم بود، اول ویدیو (دانلود+آپلود، بعد لینک)
     if video:
         try:
             send_video_to_telegram(video, msg)
             return
         except Exception:
-            pass  # ویدیو نشد (حجم زیاد/لینک نامناسب) → سراغ عکس
+            pass  # ویدیو نشد → سراغ عکس
 
     # ۲) وگرنه عکسِ باکیفیت
     if photo:
@@ -416,13 +455,20 @@ def ai_editor(candidates, recent_titles):
         "EAST, then the rest of the WORLD. Prefer Iran/Middle East even if a bit less "
         "globally prominent, but never pick a clearly trivial regional item over a truly "
         "major global event.\n"
-        "3) WRITING STYLE (important): write clear, fluent, natural Persian like a sharp "
-        "modern news channel — NOT stiff wire-copy. The headline must be specific and "
-        "self-contained: state concretely what happened (who/what/where), no vague or "
-        "generic wording. The summary must give real substance — the key concrete facts "
-        "(names, numbers, places) and why it matters — readable and engaging, yet factual. "
-        "Stay NEUTRAL: standard non-partisan names (write 'اسرائیل', never 'رژیم صهیونیستی'), "
-        "no loaded/propaganda wording from any side, no opinion, no sensationalism.\n"
+        "3) WRITING STYLE — write so it reads like a real human editor of a Persian Telegram "
+        "news channel, NOT like AI or wire-copy:\n"
+        "   - Front-load the news: the first words say what actually happened (who/what/where), "
+        "concrete with names, numbers, places.\n"
+        "   - Natural, idiomatic Persian — never translated-sounding or stiff. Vary sentence "
+        "length; short punchy sentences are good. Use a popular, accessible (عامه‌پسند) voice "
+        "ordinary readers enjoy — avoid an official/bureaucratic register.\n"
+        "   - Do NOT tack on a formulaic 'why it matters' sentence; do NOT hedge or over-explain.\n"
+        "   - BANNED cliché/filler phrases: 'شایان ذکر است', 'گفتنی است', 'لازم به ذکر است', "
+        "'قابل ذکر است', 'در همین راستا', 'بر این اساس', 'در همین حال'. Avoid generic connectives.\n"
+        "   - Length is flexible: 1-3 sentences, only as long as the story needs — not a fixed template.\n"
+        "   - Stay NEUTRAL and factual: standard non-partisan names (write 'اسرائیل', never "
+        "'رژیم صهیونیستی'); no loaded/propaganda wording from any side; no opinion, no "
+        "sensationalism, no emojis inside the text.\n"
         "4) breaking: reserve true for VIOLENT/CONFLICT events only — war, armed-conflict "
         "escalation, military or missile/air strikes, terror attacks, bombings, "
         "assassinations. STRONGLY prefer events involving Iran or the Middle East; for such "
@@ -445,8 +491,8 @@ def ai_editor(candidates, recent_titles):
         "the most newsworthy item.\n\n"
         + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
-        '{\"index\": <number or -1>, \"title_fa\": \"<clear, specific Persian headline>\", '
-        '\"summary_fa\": \"<2-3 sentence Persian summary with concrete facts and why it matters>\", '
+        '{\"index\": <number or -1>, \"title_fa\": \"<clear, specific, human Persian headline>\", '
+        '\"summary_fa\": \"<human, non-formal Persian summary, concrete facts, 1-3 sentences>\", '
         '\"breaking\": <true|false>}\n\n'
         f"Items:\n{listing}"
     )
@@ -560,7 +606,7 @@ def main():
     else:
         idx, fa_title, fa_summary, ai_breaking = result
         chosen = pool[idx]
-        # فوری را کاملاً به قضاوتِ سردبیر AI می‌سپاریم (مهم + تأثیرگذار + ناگهانی)
+        # فوری را کاملاً به قضاوتِ سردبیر AI می‌سپاریم
         breaking = bool(ai_breaking)
 
     if not chosen:
