@@ -28,7 +28,7 @@ if not TELEGRAM_BOT_TOKEN:
 TELEGRAM_CHANNEL = "@testbotaii"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AI_MODEL = "openai/gpt-4o-mini"
+AI_MODEL = "openai/gpt-4o"
 AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
