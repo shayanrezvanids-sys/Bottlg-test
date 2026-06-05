@@ -230,8 +230,8 @@ def first_sentence(text, max_chars=160):
 
 def build_message(title, summary, breaking=False):
     if breaking:
-        # پیام فوری: کوتاه، بدون 🔹، کلِ تیتر همراه «فوری/» بولد
-        text = f"🚨<b>فوری/ {html.escape(title)}</b>\n\n"
+        # پیام فوری: کوتاه، فقط 🚨 + تیترِ بولد (بدون کلمه‌ی «فوری»)
+        text = f"🚨 <b>{html.escape(title)}</b>\n\n"
         short = first_sentence(summary)
         if short:
             text += f"{html.escape(short)}\n\n"
@@ -472,41 +472,40 @@ def ai_editor(candidates, recent_titles):
         "EAST, then the rest of the WORLD. Prefer Iran/Middle East even if a bit less "
         "globally prominent, but never pick a clearly trivial regional item over a truly "
         "major global event.\n"
-        "3) WRITING STYLE — write so it reads like a real human editor of a Persian Telegram "
-        "news channel, NOT like AI or wire-copy:\n"
-        "   - Front-load the news: the first words say what actually happened (who/what/where), "
-        "concrete with names, numbers, places.\n"
-        "   - Natural, idiomatic Persian — never translated-sounding or stiff. Vary sentence "
-        "length; short punchy sentences are good. Use a warm, friendly, intimate (صمیمی) "
-        "voice — like telling a friend what happened — not an official/bureaucratic tone.\n"
-        "   - COMPLETENESS: include ALL the key substantive details the reader needs — what "
-        "was actually said or done, the concrete content (the main points of a statement, "
-        "the figures, names, places, outcome). Never write only that 'someone issued a "
-        "statement' without saying WHAT they actually said. Use the article text provided.\n"
-        "   - Do NOT hedge or pad. State the facts.\n"
-        "   - BANNED cliché/filler phrases: 'شایان ذکر است', 'گفتنی است', 'لازم به ذکر است', "
-        "'قابل ذکر است', 'در همین راستا', 'بر این اساس', 'در همین حال'. Avoid generic connectives.\n"
-        "   - Length: as long as needed to convey the key facts (usually 2-4 sentences), not "
-        "a fixed template.\n"
-        "   - Stay NEUTRAL and factual: standard non-partisan names (write 'اسرائیل', never "
-        "'رژیم صهیونیستی'); no loaded/propaganda wording from any side; no opinion, no "
-        "sensationalism, no emojis inside the text.\n"
+        "3) WRITING STYLE — write like a popular Iranian Telegram news channel (e.g. the style "
+        "of big channels), in CASUAL SPOKEN/COLLOQUIAL Persian (فارسیِ محاوره‌ای و شکسته), NOT "
+        "formal written Persian:\n"
+        "   - Use spoken verb/word forms: «می‌کنه» (نه می‌کند)، «-ه» برای «است»، «می‌خوان» (نه "
+        "می‌خواهند)، «نمی‌کنن» (نه نمی‌کنند)، «می‌گه» (نه می‌گوید)، «رو» (نه را)، «تو» (نه در، "
+        "هرجا طبیعیه)، «قراره»، «دیگه»، «اینا/اونا»، «یه» (نه یک)، «خیلیا». Sound like a real "
+        "person talking, with energy and attitude — but accurate.\n"
+        "   - Front-load the news; be concrete (names, numbers, places). Lead with the SOURCE "
+        "when known, channel-style, e.g. «وال‌استریت ژورنال:» یا «رویترز:» یا «سفارت آمریکا تو "
+        "عراق:».\n"
+        "   - COMPLETENESS: say WHAT actually happened/was said (the real content, figures, "
+        "outcome) — never just 'so-and-so issued a statement'. Use the article text provided.\n"
+        "   - Use a few RELEVANT emojis tastefully — country flags (🇮🇷🇺🇸🇮🇱🇮🇶), and a topic "
+        "emoji where it fits. Don't overdo it. (Do NOT add a leading bullet/🔴 — the channel "
+        "adds that itself.)\n"
+        "   - BANNED stiff/cliché phrases: «شایان ذکر است»، «گفتنی است»، «لازم به ذکر است»، «در "
+        "همین راستا»، «بر این اساس»، «در همین حال»، «بنا بر این گزارش». No wire-copy tone.\n"
+        "   - Length: as long as needed (usually 2-4 sentences). Keep NEUTRAL on naming "
+        "(«اسرائیل» نه «رژیم صهیونیستی»); casual register is fine but don't take sides or invent.\n"
         "4) breaking: reserve true for VIOLENT/CONFLICT events only — war, armed-conflict "
         "escalation, military or missile/air strikes, terror attacks, bombings, "
         "assassinations. STRONGLY prefer events involving Iran or the Middle East; for such "
         "violent events elsewhere, mark breaking only if clearly major. Do NOT mark breaking "
         "for non-violent news (politics, economy, diplomacy, disasters, statements, routine "
         "or ongoing news). When in doubt, false.\n\n"
-        "VOICE EXAMPLES — match this warm, clear, concrete tone and rhythm (do NOT reuse "
-        "their facts):\n"
-        "• title: «دلار از مرز ۹۰ هزار تومان گذشت؛ بازار جا خورد» — summary: «قیمت دلار امروز "
-        "برای اولین‌بار از ۹۰ هزار تومان رد شد و فعالان بازار می‌گویند بلاتکلیفی مذاکرات و کمبود "
-        "عرضه فشار را بیشتر کرده. خیلی از صرافی‌ها از صبح فروش را محدود کرده‌اند و همه چشم‌به‌راهِ "
-        "واکنش بانک مرکزی‌اند.»\n"
-        "• title: «حمله پهپادی به یک کشتی در دریای سرخ؛ خدمه سالم‌اند» — summary: «یک کشتی تجاری "
-        "صبح امروز در دریای سرخ هدف پهپاد قرار گرفت، ولی شرکت مالک می‌گوید همه‌ی خدمه سالم‌اند و "
-        "کشتی به راهش ادامه داده. این چندمین حمله در منطقه طی هفته‌های اخیر است و نگرانی از "
-        "امنیت مسیر کشتیرانی را بالا برده.»"
+        "VOICE EXAMPLES — match this CASUAL SPOKEN tone exactly (do NOT reuse their facts):\n"
+        "• title: «وال‌استریت ژورنال: ترامپ تهدید کرد اگه آمریکایی‌ها کشته بشن، آتش‌بس با ایران "
+        "تمومه» — summary: «🇺🇸 ترامپ تو جمع دستیاراش گفته اگه نیروهای آمریکایی به‌دست تهران کشته "
+        "بشن، آتش‌بس رو تموم می‌کنه و دوباره می‌ره سراغ جنگ. حمله‌های پشت‌سرهمِ تهران فشار رو روش "
+        "بیشتر کرده و خیلیا دیگه به دوامِ آتش‌بس شک دارن.»\n"
+        "• title: «سفارت آمریکا تو عراق به شهرونداش هشدار داد فعلاً به خاورمیانه سفر نکنن» — "
+        "summary: «🇮🇶 با بالا‌گرفتنِ تنش‌ها تو منطقه، سفارت آمریکا از شهروندای آمریکایی خواسته "
+        "فعلاً قیدِ سفر به خاورمیانه رو بزنن. به اونایی هم که تو منطقه زندگی می‌کنن گفته از الان "
+        "نزدیک‌ترین پناهگاه یا جای امن رو پیدا کنن که اگه درگیری شد، غافلگیر نشن.»"
     )
     recent_block = ""
     if recent_titles:
@@ -523,8 +522,8 @@ def ai_editor(candidates, recent_titles):
         "the most newsworthy item.\n\n"
         + recent_block +
         "Respond with ONLY a JSON object, no markdown, no extra text:\n"
-        '{\"index\": <number or -1>, \"title_fa\": \"<clear, specific, human Persian headline>\", '
-        '\"summary_fa\": \"<warm, human Persian summary with ALL key details/content, 2-4 sentences>\", '
+        '{\"index\": <number or -1>, \"title_fa\": \"<short COLLOQUIAL spoken-Persian lead, source-led if known>\", '
+        '\"summary_fa\": \"<COLLOQUIAL spoken-Persian detail with the real content, 2-4 sentences, a few emojis ok>\", '
         '\"breaking\": <true|false>}\n\n'
         f"Items:\n{listing}"
     )
@@ -654,7 +653,7 @@ def main():
 
     try:
         post_news(chosen, fa_title, fa_summary, breaking)
-        tag = "🚨فوری " if breaking else ""
+        tag = "🚨 " if breaking else ""
         print(f"  منتشر شد: {tag}{fa_title}")
         state["seen"].append(chosen["uid"])
         state["recent"].append(chosen["title"])  # برای جلوگیری از تکرارِ همین رویداد
