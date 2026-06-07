@@ -25,7 +25,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 if not TELEGRAM_BOT_TOKEN:
     raise SystemExit("متغیر محیطی TELEGRAM_BOT_TOKEN تنظیم نشده است.")
 
-TELEGRAM_CHANNEL = "@radioBulletin"
+TELEGRAM_CHANNEL = "@RadioBulletin"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 AI_MODEL = "openai/gpt-4o"
