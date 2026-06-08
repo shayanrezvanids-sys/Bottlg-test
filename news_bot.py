@@ -28,7 +28,8 @@ if not TELEGRAM_BOT_TOKEN:
 TELEGRAM_CHANNEL = "@testbotaii"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AI_MODEL = "openai/gpt-4o"
+AI_MODEL = "openai/gpt-4o"            # مدلِ اصلی
+AI_MODEL_FALLBACK = "openai/gpt-4o-mini"  # اگر سقفِ مدلِ اصلی پر شد، موقتاً این
 AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
@@ -382,11 +383,20 @@ def get_image_url(entry, raw_html):
     return None
 
 
+def _strip_tags(text):
+    return re.sub(r"<[^>]+>", "", text or "")
+
+
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHANNEL, "text": text,
                "parse_mode": "HTML", "disable_web_page_preview": True}
     resp = requests.post(url, json=payload, timeout=30)
+    if resp.status_code == 400:
+        # خطای پارس HTML → یک‌بارِ دیگر به‌صورتِ متنِ ساده بفرست تا پست گم نشود
+        payload = {"chat_id": TELEGRAM_CHANNEL, "text": _strip_tags(text),
+                   "disable_web_page_preview": True}
+        resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -571,19 +581,39 @@ def ai_editor(candidates, recent_titles, max_items=1):
         f"Items:\n{listing}"
     )
 
-    payload = {
-        "model": AI_MODEL,
-        "temperature": 0.7,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
     headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+    # اول مدلِ اصلی؛ اگر به سقف خورد (429)، خودکار از مدلِ پشتیبان (mini) استفاده کن.
+    content = None
+    used_model = None
+    for m in (AI_MODEL, AI_MODEL_FALLBACK):
+        if m is None:
+            continue
+        try:
+            r = requests.post(AI_ENDPOINT, headers=headers, timeout=60,
+                              json={"model": m, "temperature": 0.7, "messages": messages})
+            if r.status_code == 429:
+                print(f"  سقفِ مدل {m} پر است؛ تلاش با مدلِ بعدی…")
+                continue
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            used_model = m
+            break
+        except Exception as e:
+            print(f"  خطا با مدل {m}: {e}")
+            continue
+
+    if content is None:
+        print("  سردبیر AI در دسترس نیست (هر دو مدل ناموفق).")
+        return None
+    if used_model != AI_MODEL:
+        print(f"  (با مدلِ پشتیبان نوشته شد: {used_model})")
+
     try:
-        r = requests.post(AI_ENDPOINT, headers=headers, json=payload, timeout=60)
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"].strip()
         content = re.sub(r"^```(?:json)?|```$", "", content.strip()).strip()
         data = json.loads(content)
         items = data.get("items")
@@ -608,7 +638,7 @@ def ai_editor(candidates, recent_titles, max_items=1):
             used.add(idx)
         return picks if picks else "SKIP"
     except Exception as e:
-        print("  سردبیر AI در دسترس نیست:", e)
+        print("  خطا در پردازشِ پاسخِ AI:", e)
         return None
 
 
