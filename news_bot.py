@@ -11,6 +11,7 @@ import time
 import html
 import os
 import calendar
+from datetime import datetime, timezone, timedelta
 
 import requests
 import feedparser
@@ -26,6 +27,7 @@ if not TELEGRAM_BOT_TOKEN:
     raise SystemExit("متغیر محیطی TELEGRAM_BOT_TOKEN تنظیم نشده است.")
 
 TELEGRAM_CHANNEL = "@testbotaii"
+BACKUP_CHANNEL = "@analyzeAisTrb"   # چنلِ پشتیبان/گزارش (باید ربات در آن ادمین باشد)
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 AI_MODEL = "openai/gpt-4o"            # مدلِ اصلی
@@ -42,6 +44,16 @@ RSS_FEEDS = [
     "https://rss.dw.com/rdf/rss-en-world",                      # Deutsche Welle (EN)
     "https://www.france24.com/en/rss",                          # France 24
 ]
+
+SOURCE_NAMES = {
+    "https://feeds.bbci.co.uk/persian/rss.xml": "BBC فارسی",
+    "https://rss.dw.com/rdf/rss-per-all": "دویچه‌وله فارسی",
+    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml": "BBC خاورمیانه",
+    "https://www.aljazeera.com/xml/rss/all.xml": "الجزیره",
+    "https://feeds.bbci.co.uk/news/world/rss.xml": "BBC World",
+    "https://rss.dw.com/rdf/rss-en-world": "دویچه‌وله",
+    "https://www.france24.com/en/rss": "France 24",
+}
 
 MAX_PER_RUN = 1
 CHECK_INTERVAL_MINUTES = 10
@@ -447,6 +459,13 @@ def send_video_to_telegram(video_url, caption):
     return resp.json()
 
 
+def _msg_id(resp):
+    try:
+        return (resp or {}).get("result", {}).get("message_id")
+    except Exception:
+        return None
+
+
 def post_news(chosen, fa_title, fa_summary, breaking):
     msg = build_message(fa_title, fa_summary, breaking)
     _, og_video = get_og_media(chosen["link"])
@@ -456,21 +475,45 @@ def post_news(chosen, fa_title, fa_summary, breaking):
     # ۱) اگر فایلِ ویدیوی مستقیم بود، اول ویدیو (دانلود+آپلود، بعد لینک)
     if video:
         try:
-            send_video_to_telegram(video, msg)
-            return
+            return _msg_id(send_video_to_telegram(video, msg))
         except Exception:
             pass  # ویدیو نشد → سراغ عکس/متن
 
     # ۲) فقط اگر خودِ منبع برای این خبر عکس داشت
     if photo:
         try:
-            send_photo_to_telegram(photo, msg)
-            return
+            return _msg_id(send_photo_to_telegram(photo, msg))
         except Exception:
             pass  # عکس نشد → فقط متن
 
     # ۳) در نهایت فقط متن (اجباری نیست عکس داشته باشد)
-    send_to_telegram(msg)
+    return _msg_id(send_to_telegram(msg))
+
+
+def post_to_backup(chosen, fa_title, model_label, msg_id):
+    """برای هر پست، یک گزارشِ فنی در چنلِ پشتیبان ثبت می‌کند."""
+    if not BACKUP_CHANNEL:
+        return
+    tehran = timezone(timedelta(hours=3, minutes=30))
+    now = datetime.now(tehran).strftime("%Y-%m-%d  %H:%M")
+    chan = TELEGRAM_CHANNEL.lstrip("@")
+    post_link = f"https://t.me/{chan}/{msg_id}" if msg_id else "—"
+    text = (
+        "🗒 <b>گزارشِ انتشار</b>\n\n"
+        f"🕒 ساعت انتشار: {now} (به وقت تهران)\n"
+        f"📰 منبع: {html.escape(chosen.get('source') or '—')}\n"
+        f"🔗 لینک خبر: {html.escape(chosen.get('link') or '—')}\n"
+        f"🤖 مدلِ زبانی: {html.escape(str(model_label or '—'))}\n"
+        f"📌 لینک پست: {post_link}\n"
+        f"📝 تیتر: {html.escape(fa_title)}"
+    )
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, timeout=30, json={
+            "chat_id": BACKUP_CHANNEL, "text": text,
+            "parse_mode": "HTML", "disable_web_page_preview": True})
+    except Exception as e:
+        print("  خطا در ارسالِ گزارش به چنلِ پشتیبان:", e)
 
 
 # ============================================================
@@ -478,9 +521,9 @@ def post_news(chosen, fa_title, fa_summary, breaking):
 # ============================================================
 
 def ai_editor(candidates, recent_titles, max_items=1):
-    """خروجی: لیستی از (index, title_fa, summary_fa, breaking) یا "SKIP" یا None (AI در دسترس نیست)."""
+    """خروجی: (نتیجه، مدلِ استفاده‌شده). نتیجه = لیستِ picks یا "SKIP" یا None."""
     if not GITHUB_TOKEN:
-        return None
+        return None, None
 
     listing = []
     for i, c in enumerate(candidates):
@@ -607,7 +650,7 @@ def ai_editor(candidates, recent_titles, max_items=1):
 
     if content is None:
         print("  سردبیر AI در دسترس نیست (هر دو مدل ناموفق).")
-        return None
+        return None, None
     if used_model != AI_MODEL:
         print(f"  (با مدلِ پشتیبان نوشته شد: {used_model})")
 
@@ -617,7 +660,7 @@ def ai_editor(candidates, recent_titles, max_items=1):
         items = data.get("items")
         if items is None:  # سازگاری با حالتِ تک‌خبری
             if int(data.get("index", -1)) == -1:
-                return "SKIP"
+                return "SKIP", used_model
             items = [data]
         picks = []
         used = set()
@@ -634,10 +677,10 @@ def ai_editor(candidates, recent_titles, max_items=1):
                 continue
             picks.append((idx, title_fa, summary_fa, bool(it.get("breaking", False))))
             used.add(idx)
-        return picks if picks else "SKIP"
+        return (picks if picks else "SKIP"), used_model
     except Exception as e:
         print("  خطا در پردازشِ پاسخِ AI:", e)
-        return None
+        return None, used_model
 
 
 def rule_based_pick(candidates):
@@ -686,6 +729,7 @@ def main():
                 "image": get_image_url(entry, raw),
                 "video": get_feed_video(entry),
                 "ts": get_timestamp(entry),
+                "source": SOURCE_NAMES.get(feed_url, feed_url),
             })
 
     if not candidates:
@@ -726,9 +770,10 @@ def main():
         print(f"  حالتِ پرتراکم (جنگِ ایران): تا {max_items} خبر در این اجرا.")
 
     # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (ضدتکرارِ هوشمند و چندزبانه)
-    result = ai_editor(pool, recent, max_items)
+    result, used_model = ai_editor(pool, recent, max_items)
 
     picks = []  # هر آیتم: (chosen, fa_title, fa_summary, breaking)
+    model_label = used_model
 
     if result is None:
         print("  بازگشت به روش قانونی (پشتیبان).")
@@ -737,6 +782,7 @@ def main():
             chosen, fa_title, fa_summary = rb
             breaking = source_is_urgent(chosen["title"], strict=True)
             picks.append((chosen, fa_title, fa_summary, breaking))
+            model_label = "روش پشتیبان (ترجمه‌ی گوگل)"
     elif result == "SKIP":
         print("  سردبیر AI: خبر مهم/غیرتکراری در این نوبت نبود؛ چیزی ارسال نشد.")
     else:
@@ -751,11 +797,13 @@ def main():
         fa_title = sanitize_fa(fa_title)
         fa_summary = sanitize_fa(fa_summary)
         try:
-            post_news(chosen, fa_title, fa_summary, breaking)
+            msg_id = post_news(chosen, fa_title, fa_summary, breaking)
             tag = "🚨 " if breaking else ""
             print(f"  منتشر شد: {tag}{fa_title}")
             state["seen"].append(chosen["uid"])
             state["recent"].append(chosen["title"])
+            # گزارشِ هم‌زمان در چنلِ پشتیبان
+            post_to_backup(chosen, fa_title, model_label, msg_id)
         except Exception as e:
             print(f"  خطا در ارسال خبر: {e}")
         if n < len(picks) - 1:
