@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ربات خبری تلگرام —  رادیو بولتن (سردبیر هوش مصنوعی)
+ربات خبری تلگرام — رادیو بولتن (سردبیر هوش مصنوعی)
 اولویت: ایران ← خاورمیانه ← جهان. زبان خنثی. برچسب «فوری» برای رویدادهای ناگهانیِ مهم.
 سردبیر AI از GitHub Models (رایگان) استفاده می‌کند؛ اگر در دسترس نبود، روش پشتیبانِ قانونی فعال می‌شود.
 """
@@ -25,7 +25,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 if not TELEGRAM_BOT_TOKEN:
     raise SystemExit("متغیر محیطی TELEGRAM_BOT_TOKEN تنظیم نشده است.")
 
-TELEGRAM_CHANNEL = "@bottestaii"
+TELEGRAM_CHANNEL = "@testbotaii"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 AI_MODEL = "openai/gpt-4o"
@@ -46,14 +46,18 @@ MAX_PER_RUN = 1
 CHECK_INTERVAL_MINUTES = 10
 RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
 MAX_CANDIDATES_FOR_AI = 12    # متنِ کاملِ این تعداد خبر خوانده و به AI داده می‌شود
+IRAN_SLOTS = 7                # حداقل این تعداد از استخر به خبرهای ایران اختصاص می‌یابد
+BURST_MAX = 3                 # در حالتِ جنگِ ایران، حداکثر این تعداد پست در هر اجرا
 
 SEEN_FILE = "seen.json"
 RECENT_KEEP = 40   # چند تیترِ اخیر برای جلوگیری از خبرِ تکراری نگه داشته شود
 
 # --- کلمات برای حالت پشتیبان (بدون AI) ---
 IRAN_KEYWORDS = [
-    "iran", "tehran", "iranian", "irgc", "khamenei", "pezeshkian",
-    "ایران", "تهران",
+    "iran", "tehran", "iranian", "irgc", "khamenei", "pezeshkian", "basij",
+    "revolutionary guard", "qom", "isfahan", "mashhad", "shiraz", "tabriz", "rial",
+    "ایران", "ایرانی", "تهران", "خامنه‌ای", "خامنه ای", "پزشکیان", "سپاه", "پاسداران",
+    "قالیباف", "اصفهان", "مشهد", "شیراز", "تبریز", "ریال", "تومان", "مجلس ایران",
 ]
 MIDEAST_KEYWORDS = [
     "israel", "gaza", "palestin", "hamas", "hezbollah", "lebanon", "syria",
@@ -130,7 +134,8 @@ def _tokens(title):
 
 
 def is_duplicate(title, recent_titles):
-    """آیا این تیتر، همان رویدادِ یکی از تیترهای اخیر است؟ (تطبیقِ هم‌زبانِ تقریبی)."""
+    """فقط تیترهای تقریباً یکسان را تکراری می‌شمارد (نه خبرهای هم‌موضوع).
+    تشخیصِ ظریفِ تکرار (مثل تحولِ جدیدِ یک رویداد) به خودِ سردبیر AI سپرده می‌شود."""
     a = _tokens(title)
     if not a:
         return False
@@ -140,8 +145,8 @@ def is_duplicate(title, recent_titles):
             continue
         inter = len(a & b)
         union = len(a | b)
-        smaller = min(len(a), len(b))
-        if (union and inter / union >= 0.5) or (smaller and inter / smaller >= 0.6):
+        # فقط هم‌پوشانیِ خیلی بالا = تیترِ تقریباً یکسان
+        if union and inter / union >= 0.8:
             return True
     return False
 
@@ -202,6 +207,27 @@ def region_priority(title):
     if any(k in t for k in MIDEAST_KEYWORDS):
         return 2
     return 0
+
+
+def is_iran_item(c):
+    """آیا این خبر درباره‌ی ایران است؟ (روی تیتر و خلاصه‌ی فید بررسی می‌شود)."""
+    blob = ((c.get("title") or "") + " " + clean_html(c.get("raw") or "")).lower()
+    return any(k in blob for k in IRAN_KEYWORDS)
+
+
+WAR_KEYWORDS = [
+    "war", "strike", "airstrike", "missile", "rocket", "drone", "attack", "attacks",
+    "bomb", "bombing", "shelling", "invasion", "offensive", "ceasefire", "truce",
+    "killed", "casualties", "clash", "clashes", "assault",
+    "جنگ", "حمله", "حملات", "موشک", "موشکی", "پهپاد", "بمباران", "آتش‌بس", "آتش بس",
+    "درگیری", "کشته", "شهید", "انفجار", "حمله هوایی", "تنش", "تهاجم", "حمله نظامی",
+]
+
+
+def is_war_item(c):
+    """آیا این خبر مربوط به جنگ/درگیری است؟"""
+    blob = ((c.get("title") or "") + " " + clean_html(c.get("raw") or "")).lower()
+    return any(k in blob for k in WAR_KEYWORDS)
 
 
 def importance_score(title):
@@ -446,8 +472,8 @@ def post_news(chosen, fa_title, fa_summary, breaking):
 #  سردبیر هوش مصنوعی (GitHub Models)
 # ============================================================
 
-def ai_editor(candidates, recent_titles):
-    """خروجی: (index, title_fa, summary_fa, breaking) یا "SKIP" یا None (AI در دسترس نیست)."""
+def ai_editor(candidates, recent_titles, max_items=1):
+    """خروجی: لیستی از (index, title_fa, summary_fa, breaking) یا "SKIP" یا None (AI در دسترس نیست)."""
     if not GITHUB_TOKEN:
         return None
 
@@ -468,10 +494,12 @@ def ai_editor(candidates, recent_titles):
         "   (a) FIRST priority is any GENUINE breaking event — a major, sudden, high-impact "
         "story unfolding now (see rule 4). If one exists, choose it regardless of region. "
         "If several are breaking, prefer Iran, then Middle East, then world.\n"
-        "   (b) If nothing is breaking, prefer important IRAN news, then the wider MIDDLE "
-        "EAST, then the rest of the WORLD. Prefer Iran/Middle East even if a bit less "
-        "globally prominent, but never pick a clearly trivial regional item over a truly "
-        "major global event.\n"
+        "   (b) If nothing is breaking, IRAN IS THE TOP EDITORIAL PRIORITY. This channel is "
+        "Iran-focused: whenever there is ANY reasonable news about Iran (events inside Iran, "
+        "Iranian politics/economy/society, or anything directly involving Iran), STRONGLY "
+        "prefer it over Middle East or world news. Pick a world story only when there is no "
+        "worthwhile Iran item, or when a world event is genuinely huge. After Iran, prefer "
+        "the wider Middle East, then the rest of the world.\n"
         "3) WRITING STYLE — write like a popular Iranian Telegram news channel (e.g. the style "
         "of big channels), in CASUAL SPOKEN/COLLOQUIAL Persian (فارسیِ محاوره‌ای و شکسته), NOT "
         "formal written Persian:\n"
@@ -512,19 +540,34 @@ def ai_editor(candidates, recent_titles):
         rt = "\n".join(f"- {t}" for t in recent_titles[-12:])
         recent_block = (
             "Recently posted headlines (to avoid EXACT repeats). Do not re-post the very "
-            "same report. But a genuinely NEW development, update, or new angle on an "
-            "ongoing story IS allowed — treat it as new:\n" + rt + "\n\n"
+            "same report. But a genuinely NEW development on an ongoing story IS allowed and "
+            "SHOULD be posted — e.g. a ceasefire, a new strike, an escalation, a new "
+            "statement are all NEW news even if the same war/topic was covered before. Only "
+            "skip a near-identical repeat of the exact same event:\n" + rt + "\n\n"
+        )
+    if max_items > 1:
+        task = (
+            "Below are candidate news items. There is an ACTIVE Iran-related conflict, so you "
+            f"MAY pick up to {max_items} of the most important DISTINCT items (different "
+            "events/developments — e.g. a strike, a ceasefire, a statement — NOT the same "
+            "event twice), most important first. Pick fewer (even just 1) if only one is "
+            "truly worth it. Skip trivia and near-identical repeats.\n\n"
+        )
+    else:
+        task = (
+            "Below are candidate news items. Pick the SINGLE best per the rules above. You "
+            "should ALMOST ALWAYS pick one; return an empty list ONLY if every item is "
+            "clearly trivial/soft or a near-identical repeat of an already-posted headline.\n\n"
         )
     user = (
-        "Below are candidate news items. You should ALMOST ALWAYS pick one — choose the "
-        "single best per the rules above. Return index -1 ONLY if every item is clearly "
-        "trivial/soft, or an exact repeat of an already-posted headline. If unsure, pick "
-        "the most newsworthy item.\n\n"
+        task
         + recent_block +
-        "Respond with ONLY a JSON object, no markdown, no extra text:\n"
-        '{\"index\": <number or -1>, \"title_fa\": \"<short COLLOQUIAL spoken-Persian lead, source-led if known>\", '
+        "Respond with ONLY a JSON object, no markdown, no extra text. The 'items' array has "
+        f"1 to {max_items} entries (empty only to skip):\n"
+        '{\"items\": [{\"index\": <number>, '
+        '\"title_fa\": \"<short COLLOQUIAL spoken-Persian lead, source-led if known>\", '
         '\"summary_fa\": \"<COLLOQUIAL spoken-Persian detail with the real content, 2-4 sentences, a few emojis ok>\", '
-        '\"breaking\": <true|false>}\n\n'
+        '\"breaking\": <true|false>}]}\n\n'
         f"Items:\n{listing}"
     )
 
@@ -543,16 +586,27 @@ def ai_editor(candidates, recent_titles):
         content = r.json()["choices"][0]["message"]["content"].strip()
         content = re.sub(r"^```(?:json)?|```$", "", content.strip()).strip()
         data = json.loads(content)
-        idx = int(data.get("index", -1))
-        if idx == -1:
-            return "SKIP"
-        if 0 <= idx < len(candidates):
-            title_fa = (data.get("title_fa") or "").strip()
-            summary_fa = (data.get("summary_fa") or "").strip()
-            breaking = bool(data.get("breaking", False))
-            if title_fa:
-                return (idx, title_fa, summary_fa, breaking)
-        return None
+        items = data.get("items")
+        if items is None:  # سازگاری با حالتِ تک‌خبری
+            if int(data.get("index", -1)) == -1:
+                return "SKIP"
+            items = [data]
+        picks = []
+        used = set()
+        for it in items[:max_items]:
+            try:
+                idx = int(it.get("index", -1))
+            except (ValueError, TypeError):
+                continue
+            if not (0 <= idx < len(candidates)) or idx in used:
+                continue
+            title_fa = (it.get("title_fa") or "").strip()
+            summary_fa = (it.get("summary_fa") or "").strip()
+            if not title_fa:
+                continue
+            picks.append((idx, title_fa, summary_fa, bool(it.get("breaking", False))))
+            used.add(idx)
+        return picks if picks else "SKIP"
     except Exception as e:
         print("  سردبیر AI در دسترس نیست:", e)
         return None
@@ -617,48 +671,67 @@ def main():
     if not candidates:
         print("همه‌ی خبرهای تازه تکراری بودند؛ چیزی ارسال نشد.")
         return
-    pool = candidates[:MAX_CANDIDATES_FOR_AI]
+
+    # استخرِ AI: سهمِ تضمینی برای خبرهای ایران تا حتماً به دستِ سردبیر برسند
+    iran_items = [c for c in candidates if is_iran_item(c)]
+    other_items = [c for c in candidates if not is_iran_item(c)]
+    pool = iran_items[:IRAN_SLOTS]
+    for c in other_items:
+        if len(pool) >= MAX_CANDIDATES_FOR_AI:
+            break
+        pool.append(c)
+    # اگر هنوز جا مانده، خبرهای ایرانِ بیشتر را هم اضافه کن
+    for c in iran_items[IRAN_SLOTS:]:
+        if len(pool) >= MAX_CANDIDATES_FOR_AI:
+            break
+        pool.append(c)
+    print(f"  استخر: {len(pool)} خبر ({len([c for c in pool if is_iran_item(c)])} مربوط به ایران)")
 
     # متنِ کاملِ خبرها را بخوان تا سردبیر AI همه‌ی جزئیاتِ مهم را داشته باشد
     for c in pool:
         c["body"] = get_article_text(c["link"])
 
-    # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (برای ضدتکرارِ هوشمند و چندزبانه)
-    result = ai_editor(pool, recent)
+    # حالتِ پرتراکم: اگر خبرِ جنگیِ مربوط به ایران در استخر بود، اجازه‌ی چند پست در این اجرا
+    iran_war = any(is_iran_item(c) and is_war_item(c) for c in pool)
+    max_items = BURST_MAX if iran_war else 1
+    if iran_war:
+        print(f"  حالتِ پرتراکم (جنگِ ایران): تا {max_items} خبر در این اجرا.")
 
-    chosen = fa_title = fa_summary = None
-    breaking = False
+    # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (ضدتکرارِ هوشمند و چندزبانه)
+    result = ai_editor(pool, recent, max_items)
+
+    picks = []  # هر آیتم: (chosen, fa_title, fa_summary, breaking)
 
     if result is None:
         print("  بازگشت به روش قانونی (پشتیبان).")
         rb = rule_based_pick(pool)
         if rb:
             chosen, fa_title, fa_summary = rb
-            # حالت پشتیبان (بدون AI): فقط اگر تیتر صراحتاً breaking/urgent باشد
             breaking = source_is_urgent(chosen["title"], strict=True)
+            picks.append((chosen, fa_title, fa_summary, breaking))
     elif result == "SKIP":
         print("  سردبیر AI: خبر مهم/غیرتکراری در این نوبت نبود؛ چیزی ارسال نشد.")
     else:
-        idx, fa_title, fa_summary, ai_breaking = result
-        chosen = pool[idx]
-        # فوری را کاملاً به قضاوتِ سردبیر AI می‌سپاریم
-        breaking = bool(ai_breaking)
+        for idx, fa_title, fa_summary, ai_breaking in result:
+            picks.append((pool[idx], fa_title, fa_summary, bool(ai_breaking)))
 
-    if not chosen:
+    if not picks:
         save_state(state)
         return
 
-    fa_title = sanitize_fa(fa_title)
-    fa_summary = sanitize_fa(fa_summary)
-
-    try:
-        post_news(chosen, fa_title, fa_summary, breaking)
-        tag = "🚨 " if breaking else ""
-        print(f"  منتشر شد: {tag}{fa_title}")
-        state["seen"].append(chosen["uid"])
-        state["recent"].append(chosen["title"])  # برای جلوگیری از تکرارِ همین رویداد
-    except Exception as e:
-        print(f"  خطا در ارسال خبر: {e}")
+    for n, (chosen, fa_title, fa_summary, breaking) in enumerate(picks):
+        fa_title = sanitize_fa(fa_title)
+        fa_summary = sanitize_fa(fa_summary)
+        try:
+            post_news(chosen, fa_title, fa_summary, breaking)
+            tag = "🚨 " if breaking else ""
+            print(f"  منتشر شد: {tag}{fa_title}")
+            state["seen"].append(chosen["uid"])
+            state["recent"].append(chosen["title"])
+        except Exception as e:
+            print(f"  خطا در ارسال خبر: {e}")
+        if n < len(picks) - 1:
+            time.sleep(3)  # فاصله‌ی کوتاه بین پست‌ها
 
     save_state(state)
     print("تمام شد.")
