@@ -217,11 +217,11 @@ def is_iran_item(c):
 
 
 WAR_KEYWORDS = [
-    "war", "strike", "airstrike", "missile", "rocket", "drone", "attack", "attacks",
-    "bomb", "bombing", "shelling", "invasion", "offensive", "ceasefire", "truce",
-    "killed", "casualties", "clash", "clashes", "assault",
-    "جنگ", "حمله", "حملات", "موشک", "موشکی", "پهپاد", "بمباران", "آتش‌بس", "آتش بس",
-    "درگیری", "کشته", "شهید", "انفجار", "حمله هوایی", "تنش", "تهاجم", "حمله نظامی",
+    "war", "airstrike", "air strike", "missile strike", "missile attack",
+    "rocket attack", "drone strike", "bombing", "bombardment", "shelling",
+    "invasion", "ceasefire", "truce", "armed conflict", "military strike", "warplane",
+    "جنگ", "حمله موشکی", "حمله هوایی", "حمله پهپادی", "بمباران", "موشک‌باران",
+    "موشکباران", "آتش‌بس", "آتش بس", "حمله نظامی", "تهاجم نظامی", "جنگنده", "شلیک موشک",
 ]
 
 
@@ -449,9 +449,9 @@ def send_video_to_telegram(video_url, caption):
 
 def post_news(chosen, fa_title, fa_summary, breaking):
     msg = build_message(fa_title, fa_summary, breaking)
-    og_image, og_video = get_og_media(chosen["link"])
+    _, og_video = get_og_media(chosen["link"])
     video = chosen.get("video") or og_video
-    photo = og_image or chosen["image"]
+    photo = chosen.get("image")  # فقط عکسِ اختصاصیِ فیدِ همان خبر (نه بنرِ عمومیِ og)
 
     # ۱) اگر فایلِ ویدیوی مستقیم بود، اول ویدیو (دانلود+آپلود، بعد لینک)
     if video:
@@ -459,22 +459,17 @@ def post_news(chosen, fa_title, fa_summary, breaking):
             send_video_to_telegram(video, msg)
             return
         except Exception:
-            pass  # ویدیو نشد → سراغ عکس
+            pass  # ویدیو نشد → سراغ عکس/متن
 
-    # ۲) وگرنه عکسِ باکیفیت
+    # ۲) فقط اگر خودِ منبع برای این خبر عکس داشت
     if photo:
         try:
             send_photo_to_telegram(photo, msg)
             return
         except Exception:
-            try:
-                if chosen["image"] and chosen["image"] != photo:
-                    send_photo_to_telegram(chosen["image"], msg)
-                    return
-            except Exception:
-                pass
+            pass  # عکس نشد → فقط متن
 
-    # ۳) در نهایت فقط متن
+    # ۳) در نهایت فقط متن (اجباری نیست عکس داشته باشد)
     send_to_telegram(msg)
 
 
@@ -557,11 +552,14 @@ def ai_editor(candidates, recent_titles, max_items=1):
         )
     if max_items > 1:
         task = (
-            "Below are candidate news items. There is an ACTIVE Iran-related conflict, so you "
-            f"MAY pick up to {max_items} of the most important DISTINCT items (different "
-            "events/developments — e.g. a strike, a ceasefire, a statement — NOT the same "
-            "event twice), most important first. Pick fewer (even just 1) if only one is "
-            "truly worth it. Skip trivia and near-identical repeats.\n\n"
+            "Below are candidate news items. Pick the SINGLE best one — UNLESS Iran is RIGHT "
+            "NOW a direct party to an ACTIVE armed conflict (Iran is attacking or being "
+            "attacked — war, missile/air/drone strikes, bombing, etc.) AND several DISTINCT "
+            "developments are happening at once. ONLY in that specific case may you pick up "
+            f"to {max_items} distinct items (e.g. a strike, a counter-strike, a ceasefire), "
+            "most important first. If Iran is merely mentioned, only commenting on someone "
+            "else's war, or it's ordinary news, pick EXACTLY ONE. Skip trivia and "
+            "near-identical repeats.\n\n"
         )
     else:
         task = (
