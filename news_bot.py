@@ -34,24 +34,37 @@ AI_MODEL = "openai/gpt-4o"            # مدلِ اصلی
 AI_MODEL_FALLBACK = "openai/gpt-4o-mini"  # اگر سقفِ مدلِ اصلی پر شد، موقتاً این
 AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
-# منابع معتبر؛ پوشش خوبِ ایران/خاورمیانه + جهان، و قابل‌اعتماد در حالت پشتیبان.
-RSS_FEEDS = [
-    "https://feeds.bbci.co.uk/persian/rss.xml",                 # BBC Persian (فارسی)
-    "https://rss.dw.com/rdf/rss-per-all",                       # DW Persian (فارسی)
-    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",  # BBC Middle East
-    "https://www.aljazeera.com/xml/rss/all.xml",                # Al Jazeera
-    "https://feeds.bbci.co.uk/news/world/rss.xml",              # BBC World
-    "https://rss.dw.com/rdf/rss-en-world",                      # Deutsche Welle (EN)
-    "https://www.france24.com/en/rss",                          # France 24
-]
+# ============================================================
+#  پیکربندیِ این کلون  ←  فقط همین بخش در هر کلون فرق می‌کند
+# ============================================================
+# نامِ این ربات (در گزارشِ چنلِ پشتیبان نمایش داده می‌شود)
+BOT_NAME = "سیاسی و اقتصادی"
 
+# دستورِ موضوعی به سردبیرِ AI: این ربات فقط همین حوزه را پوشش می‌دهد.
+TOPIC_HINT = (
+    "This channel covers POLITICS & ECONOMY for Iran and the world: government, "
+    "diplomacy, protests, sanctions, war and conflict, elections, nuclear talks, the "
+    "economy, currency (dollar/gold), inflation, markets and housing. Pick items that "
+    "fit this topic; treat clearly off-topic items (pure sports, gadget/tech reviews, "
+    "celebrity/cinema) as soft and skip them."
+)
+
+# اولویتِ ایران. برای ربات سیاسی/اقتصادی True؛ برای فناوری و سینما False.
+IRAN_PRIORITY = True
+# حالتِ پرتراکمِ جنگِ ایران (چند پست در یک اجرا). فقط ربات سیاسی/اقتصادی True.
+ENABLE_WAR_BURST = True
+# در هر اجرا تا این تعداد خبرِ مهمِ تازه پوشش داده می‌شود («پوششِ همه‌ی خبرهای مهم»).
+NORMAL_MAX_ITEMS = 4
+
+# --- منابعِ این ربات (همه مستقل و غیرحکومتی؛ این فیدها قبلاً در ربات کار کرده‌اند) ---
+RSS_FEEDS = [
+    "https://rss.dw.com/rdf/rss-per-all",          # دویچه‌وله فارسی — لنگرگاه (ایران + جهان)
+    "https://www.aljazeera.com/xml/rss/all.xml",   # الجزیره — خاورمیانه/منطقه، سریع
+    "https://www.france24.com/en/rss",             # France 24 — جهان/منطقه
+]
 SOURCE_NAMES = {
-    "https://feeds.bbci.co.uk/persian/rss.xml": "BBC فارسی",
     "https://rss.dw.com/rdf/rss-per-all": "دویچه‌وله فارسی",
-    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml": "BBC خاورمیانه",
     "https://www.aljazeera.com/xml/rss/all.xml": "الجزیره",
-    "https://feeds.bbci.co.uk/news/world/rss.xml": "BBC World",
-    "https://rss.dw.com/rdf/rss-en-world": "دویچه‌وله",
     "https://www.france24.com/en/rss": "France 24",
 }
 
@@ -59,8 +72,8 @@ MAX_PER_RUN = 1
 CHECK_INTERVAL_MINUTES = 10
 RUN_FOREVER = os.environ.get("RUN_FOREVER", "0") == "1"
 MAX_CANDIDATES_FOR_AI = 12    # متنِ کاملِ این تعداد خبر خوانده و به AI داده می‌شود
-IRAN_SLOTS = 7                # حداقل این تعداد از استخر به خبرهای ایران اختصاص می‌یابد
-BURST_MAX = 3                 # در حالتِ جنگِ ایران، حداکثر این تعداد پست در هر اجرا
+IRAN_SLOTS = 7                # وقتی IRAN_PRIORITY روشن است، این تعداد سهمِ تضمینیِ ایران
+BURST_MAX = 6                 # سقفِ پست در حالتِ جنگِ ایران
 
 SEEN_FILE = "seen.json"
 RECENT_KEEP = 40   # چند تیترِ اخیر برای جلوگیری از خبرِ تکراری نگه داشته شود
@@ -500,6 +513,7 @@ def post_to_backup(chosen, fa_title, model_label, msg_id):
     post_link = f"https://t.me/{chan}/{msg_id}" if msg_id else "—"
     text = (
         "🗒 <b>گزارشِ انتشار</b>\n\n"
+        f"🏷 ربات: {html.escape(BOT_NAME)}\n"
         f"🕒 ساعت انتشار: {now} (به وقت تهران)\n"
         f"📰 منبع: {html.escape(chosen.get('source') or '—')}\n"
         f"🔗 لینک خبر: {html.escape(chosen.get('link') or '—')}\n"
@@ -531,23 +545,35 @@ def ai_editor(candidates, recent_titles, max_items=1):
         listing.append(f"{i}. {c['title']} — {brief}")
     listing = "\n".join(listing)
 
+    if IRAN_PRIORITY:
+        priority_rule = (
+            "2) SELECTION PRIORITY, in this exact order:\n"
+            "   (a) FIRST priority is any GENUINE breaking event — a major, sudden, high-impact "
+            "story unfolding now (see rule 4). If one exists, choose it regardless of region. "
+            "If several are breaking, prefer Iran, then Middle East, then world.\n"
+            "   (b) If nothing is breaking, IRAN IS THE TOP EDITORIAL PRIORITY. This channel is "
+            "Iran-focused: whenever there is ANY reasonable news about Iran (events inside Iran, "
+            "Iranian politics/economy/society, or anything directly involving Iran), STRONGLY "
+            "prefer it over Middle East or world news. Pick a world story only when there is no "
+            "worthwhile Iran item, or when a world event is genuinely huge. After Iran, prefer "
+            "the wider Middle East, then the rest of the world.\n"
+        )
+    else:
+        priority_rule = (
+            "2) SELECTION PRIORITY: choose the most important, highest-impact, most relevant "
+            "items WITHIN this channel's topic. Judge purely by newsworthiness and reader "
+            "interest; there is no regional priority.\n"
+        )
+
     system = (
         "You are the senior editor of an independent, strictly politically neutral, "
         "Persian-language news channel. Rules:\n"
-        "1) Favor important hard news (politics, conflict, diplomacy, economy, disasters, "
-        "major society/science). Reject ONLY clearly soft/trivial items (celebrity, "
-        "lifestyle, gossip, odd/weird news). If a story is ordinary but still real news, "
+        f"0) TOPIC FOCUS — this is what the channel is about: {TOPIC_HINT}\n"
+        "1) Favor important, real hard news that fits this topic. Reject ONLY clearly "
+        "soft/trivial items (celebrity gossip, lifestyle, odd/weird news) AND items clearly "
+        "outside the channel's topic. If a story is ordinary but still real, on-topic news, "
         "it is fine to pick it.\n"
-        "2) SELECTION PRIORITY, in this exact order:\n"
-        "   (a) FIRST priority is any GENUINE breaking event — a major, sudden, high-impact "
-        "story unfolding now (see rule 4). If one exists, choose it regardless of region. "
-        "If several are breaking, prefer Iran, then Middle East, then world.\n"
-        "   (b) If nothing is breaking, IRAN IS THE TOP EDITORIAL PRIORITY. This channel is "
-        "Iran-focused: whenever there is ANY reasonable news about Iran (events inside Iran, "
-        "Iranian politics/economy/society, or anything directly involving Iran), STRONGLY "
-        "prefer it over Middle East or world news. Pick a world story only when there is no "
-        "worthwhile Iran item, or when a world event is genuinely huge. After Iran, prefer "
-        "the wider Middle East, then the rest of the world.\n"
+        + priority_rule +
         "3) WRITING STYLE — write like a popular Iranian Telegram news channel (e.g. the style "
         "of big channels), in CASUAL SPOKEN/COLLOQUIAL Persian (فارسیِ محاوره‌ای و شکسته), NOT "
         "formal written Persian:\n"
@@ -593,23 +619,15 @@ def ai_editor(candidates, recent_titles, max_items=1):
             "statement are all NEW news even if the same war/topic was covered before. Only "
             "skip a near-identical repeat of the exact same event:\n" + rt + "\n\n"
         )
-    if max_items > 1:
-        task = (
-            "Below are candidate news items. Pick the SINGLE best one — UNLESS Iran is RIGHT "
-            "NOW a direct party to an ACTIVE armed conflict (Iran is attacking or being "
-            "attacked — war, missile/air/drone strikes, bombing, etc.) AND several DISTINCT "
-            "developments are happening at once. ONLY in that specific case may you pick up "
-            f"to {max_items} distinct items (e.g. a strike, a counter-strike, a ceasefire), "
-            "most important first. If Iran is merely mentioned, only commenting on someone "
-            "else's war, or it's ordinary news, pick EXACTLY ONE. Skip trivia and "
-            "near-identical repeats.\n\n"
-        )
-    else:
-        task = (
-            "Below are candidate news items. Pick the SINGLE best per the rules above. You "
-            "should ALMOST ALWAYS pick one; return an empty list ONLY if every item is "
-            "clearly trivial/soft or a near-identical repeat of an already-posted headline.\n\n"
-        )
+    task = (
+        "Below are candidate news items. Pick ALL the genuinely important, on-topic, "
+        f"non-duplicate NEW items in this batch — up to {max_items} of them, most important "
+        "first. The GOAL is to COVER everything that matters right now, so do NOT stop at one "
+        "if several distinct important stories are present. SKIP only: clearly soft/trivial "
+        "items, items outside this channel's topic, and near-identical repeats of "
+        "already-posted headlines. Return an empty list ONLY if truly nothing here is worth "
+        "posting.\n\n"
+    )
     user = (
         task
         + recent_block +
@@ -744,30 +762,36 @@ def main():
         print("همه‌ی خبرهای تازه تکراری بودند؛ چیزی ارسال نشد.")
         return
 
-    # استخرِ AI: سهمِ تضمینی برای خبرهای ایران تا حتماً به دستِ سردبیر برسند
-    iran_items = [c for c in candidates if is_iran_item(c)]
-    other_items = [c for c in candidates if not is_iran_item(c)]
-    pool = iran_items[:IRAN_SLOTS]
-    for c in other_items:
-        if len(pool) >= MAX_CANDIDATES_FOR_AI:
-            break
-        pool.append(c)
-    # اگر هنوز جا مانده، خبرهای ایرانِ بیشتر را هم اضافه کن
-    for c in iran_items[IRAN_SLOTS:]:
-        if len(pool) >= MAX_CANDIDATES_FOR_AI:
-            break
-        pool.append(c)
-    print(f"  استخر: {len(pool)} خبر ({len([c for c in pool if is_iran_item(c)])} مربوط به ایران)")
+    # استخرِ AI
+    if IRAN_PRIORITY:
+        # سهمِ تضمینی برای خبرهای ایران تا حتماً به دستِ سردبیر برسند
+        iran_items = [c for c in candidates if is_iran_item(c)]
+        other_items = [c for c in candidates if not is_iran_item(c)]
+        pool = iran_items[:IRAN_SLOTS]
+        for c in other_items:
+            if len(pool) >= MAX_CANDIDATES_FOR_AI:
+                break
+            pool.append(c)
+        for c in iran_items[IRAN_SLOTS:]:
+            if len(pool) >= MAX_CANDIDATES_FOR_AI:
+                break
+            pool.append(c)
+        print(f"  استخر: {len(pool)} خبر ({len([c for c in pool if is_iran_item(c)])} مربوط به ایران)")
+    else:
+        pool = candidates[:MAX_CANDIDATES_FOR_AI]
+        print(f"  استخر: {len(pool)} خبر")
 
     # متنِ کاملِ خبرها را بخوان تا سردبیر AI همه‌ی جزئیاتِ مهم را داشته باشد
     for c in pool:
         c["body"] = get_article_text(c["link"])
 
-    # حالتِ پرتراکم: اگر خبرِ جنگیِ مربوط به ایران در استخر بود، اجازه‌ی چند پست در این اجرا
-    iran_war = any(is_iran_item(c) and is_war_item(c) for c in pool)
-    max_items = BURST_MAX if iran_war else 1
-    if iran_war:
+    # تعدادِ پست در این اجرا: عادی NORMAL_MAX_ITEMS؛ در جنگِ ایران تا BURST_MAX
+    max_items = NORMAL_MAX_ITEMS
+    if ENABLE_WAR_BURST and any(is_iran_item(c) and is_war_item(c) for c in pool):
+        max_items = max(NORMAL_MAX_ITEMS, BURST_MAX)
         print(f"  حالتِ پرتراکم (جنگِ ایران): تا {max_items} خبر در این اجرا.")
+    else:
+        print(f"  تا {max_items} خبرِ مهمِ تازه در این اجرا پوشش داده می‌شود.")
 
     # سردبیر AI با آگاهی از خبرهای اخیراً منتشرشده (ضدتکرارِ هوشمند و چندزبانه)
     result, used_model = ai_editor(pool, recent, max_items)
