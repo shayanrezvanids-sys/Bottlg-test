@@ -56,16 +56,12 @@ ENABLE_WAR_BURST = True
 # در هر اجرا تا این تعداد خبرِ مهمِ تازه پوشش داده می‌شود («پوششِ همه‌ی خبرهای مهم»).
 NORMAL_MAX_ITEMS = 4
 
-# --- منابعِ این ربات (همه مستقل و غیرحکومتی؛ این فیدها قبلاً در ربات کار کرده‌اند) ---
+# --- منبعِ این ربات (تک‌منبع، مستقل و غیرحکومتی → بدونِ هم‌پوشانیِ بینِ منابع) ---
 RSS_FEEDS = [
-    "https://rss.dw.com/rdf/rss-per-all",          # دویچه‌وله فارسی — لنگرگاه (ایران + جهان)
-    "https://www.aljazeera.com/xml/rss/all.xml",   # الجزیره — خاورمیانه/منطقه، سریع
-    "https://www.france24.com/en/rss",             # France 24 — جهان/منطقه
+    "https://rss.dw.com/rdf/rss-per-all",   # دویچه‌وله فارسی — ایران + جهان (سیاست/اقتصاد)
 ]
 SOURCE_NAMES = {
     "https://rss.dw.com/rdf/rss-per-all": "دویچه‌وله فارسی",
-    "https://www.aljazeera.com/xml/rss/all.xml": "الجزیره",
-    "https://www.france24.com/en/rss": "France 24",
 }
 
 MAX_PER_RUN = 1
