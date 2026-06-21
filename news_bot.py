@@ -30,8 +30,9 @@ TELEGRAM_CHANNEL = "@testbotaii"
 BACKUP_CHANNEL = "@analyzeAisTrb"   # چنلِ پشتیبان/گزارش (باید ربات در آن ادمین باشد)
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AI_MODEL = "openai/gpt-4o"            # مدلِ اصلی
-AI_MODEL_FALLBACK = "openai/gpt-4o-mini"  # اگر سقفِ مدلِ اصلی پر شد، موقتاً این
+AI_MODEL = "openai/gpt-4.1"           # مدلِ اصلی
+# اگر سقفِ هر مدل پر شد (۴۲۹)، به‌ترتیب می‌رود سراغِ مدلِ بعدی:
+AI_MODEL_CHAIN = [AI_MODEL, "openai/gpt-4o", "openai/gpt-4o-mini"]
 AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 
 # ============================================================
@@ -642,10 +643,10 @@ def ai_editor(candidates, recent_titles, max_items=1):
         {"role": "user", "content": user},
     ]
 
-    # اول مدلِ اصلی؛ اگر به سقف خورد (429)، خودکار از مدلِ پشتیبان (mini) استفاده کن.
+    # اول gpt-4.1؛ اگر به سقف خورد (429)، خودکار gpt-4o، بعد gpt-4o-mini.
     content = None
     used_model = None
-    for m in (AI_MODEL, AI_MODEL_FALLBACK):
+    for m in AI_MODEL_CHAIN:
         if m is None:
             continue
         try:
