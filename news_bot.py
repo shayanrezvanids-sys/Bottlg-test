@@ -29,11 +29,19 @@ if not TELEGRAM_BOT_TOKEN:
 TELEGRAM_CHANNEL = "@testbotaii"
 BACKUP_CHANNEL = "@analyzeAisTrb"   # چنلِ پشتیبان/گزارش (باید ربات در آن ادمین باشد)
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-AI_MODEL = "openai/gpt-4.1"           # مدلِ اصلی
-# اگر سقفِ هر مدل پر شد (۴۲۹)، به‌ترتیب می‌رود سراغِ مدلِ بعدی:
-AI_MODEL_CHAIN = [AI_MODEL, "openai/gpt-4o", "openai/gpt-4o-mini"]
-AI_ENDPOINT = "https://models.github.ai/inference/chat/completions"
+GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")   # اگر خالی باشد، خودکار از GitHub Models استفاده می‌شود
+
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GITHUB_ENDPOINT = "https://models.github.ai/inference/chat/completions"
+# زنجیره: اول بهترین، بعد فالبک‌ها — (provider, model)
+AI_CHAIN = [
+    ("gemini", "gemini-2.5-pro"),
+    ("gemini", "gemini-2.5-flash"),
+    ("github", "openai/gpt-4.1"),
+    ("github", "openai/gpt-4o"),
+    ("github", "openai/gpt-4o-mini"),
+]
 
 # ============================================================
 #  پیکربندیِ این کلون  ←  فقط همین بخش در هر کلون فرق می‌کند
@@ -643,31 +651,34 @@ def ai_editor(candidates, recent_titles, max_items=1):
         {"role": "user", "content": user},
     ]
 
-    # اول gpt-4.1؛ اگر به سقف خورد (429)، خودکار gpt-4o، بعد gpt-4o-mini.
+    # زنجیره: Gemini 2.5 Pro → Flash → gpt-4.1 → gpt-4o → gpt-4o-mini
     content = None
     used_model = None
-    for m in AI_MODEL_CHAIN:
-        if m is None:
+    for provider, model in AI_CHAIN:
+        endpoint = GEMINI_ENDPOINT if provider == "gemini" else GITHUB_ENDPOINT
+        key = GEMINI_API_KEY if provider == "gemini" else GITHUB_TOKEN
+        if not key:
             continue
         try:
-            r = requests.post(AI_ENDPOINT, headers=headers, timeout=60,
-                              json={"model": m, "temperature": 0.7, "messages": messages})
+            r = requests.post(
+                endpoint, timeout=120,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": model, "temperature": 0.7, "messages": messages})
             if r.status_code == 429:
-                print(f"  سقفِ مدل {m} پر است؛ تلاش با مدلِ بعدی…")
+                print(f"  سقفِ {provider}:{model} پر است؛ تلاش با مدلِ بعدی…")
                 continue
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"].strip()
-            used_model = m
+            used_model = f"{provider}:{model}"
+            print(f"  🤖 مدل: {used_model}")
             break
         except Exception as e:
-            print(f"  خطا با مدل {m}: {e}")
+            print(f"  خطا با {provider}:{model}: {e}")
             continue
 
     if content is None:
-        print("  سردبیر AI در دسترس نیست (هر دو مدل ناموفق).")
+        print("  سردبیر AI در دسترس نیست (همه‌ی مدل‌ها ناموفق).")
         return None, None
-    if used_model != AI_MODEL:
-        print(f"  (با مدلِ پشتیبان نوشته شد: {used_model})")
 
     try:
         content = re.sub(r"^```(?:json)?|```$", "", content.strip()).strip()
